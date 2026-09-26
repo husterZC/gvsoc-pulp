@@ -309,7 +309,10 @@ public:
         NET(io_spill); NET(data_width); NET(addr_width);
         READ(source_contexts); READ(memory_contexts); READ(max_burst_beats);
         READ(axi_addr_width); READ(axi_data_width); READ(axi_id_width); READ(axi_len_width);
-        READ(memory_base); READ(interleave_bytes); READ(memory_bytes);
+        // Address-map fields must retain all 64 bits (e.g. stacked DRAM above 4 GiB).
+        cfg.memory_base=js->get_uint("memory_base");
+        cfg.interleave_bytes=js->get_uint("interleave_bytes");
+        cfg.memory_bytes=js->get_uint("memory_bytes");
 #undef READ
 #undef NET
         if (js->get_child_bool("i3d")) {
