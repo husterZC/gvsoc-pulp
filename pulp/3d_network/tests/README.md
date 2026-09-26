@@ -65,6 +65,8 @@ of the results JSON and compressed logs to its `report/` subdirectory. Use
 `NETWORK3D_BUILD_DIR` for their default paths.
 
 Select DRAMSys inputs with the standard `DRAMSYS_PATH` and `LD_LIBRARY_PATH`.
+The checks and sweep use `hbm4-emu-fast.json`, matching the benchmark targets'
+default with database recording, windowing and the progress bar disabled.
 Timing and queue-capacity checks modify copies under `build/`. The module's
 `doc/` directory is reserved for Markdown model documentation.
 

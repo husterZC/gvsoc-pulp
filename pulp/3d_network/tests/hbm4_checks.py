@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--output', type=Path, default=build/'hbm4_checks.json',
                         help='Results JSON (default: %(default)s)')
     args = parser.parse_args()
-    original = Path(os.environ.get('DRAMSYS_PATH', ROOT/'core/models/memory'))/'dramsys_configs/hbm4-emu-example.json'
+    original = Path(os.environ.get('DRAMSYS_PATH', ROOT/'core/models/memory'))/'dramsys_configs/hbm4-emu-fast.json'
     results = []
 
     def run(name, config=original, **parameters):

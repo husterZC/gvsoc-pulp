@@ -48,7 +48,7 @@ def collect(log, contexts):
         assert c['read_requests'] == 1024 and c['native_reads'] == 32768
         assert c['read_bytes'] == 1024**2 and c['pending'] == 0
         assert c['native_writes'] == c['write_requests'] == c['write_bytes'] == 0
-    maximums = re.findall(r'MAX BW:.*?\|\s*([0-9.]+) GB/s', text)
+    maximums = re.findall(r'MAX BW:.*?\|\s*([0-9.]+)\s+GB/s', text)
     assert len(maximums) == 1024 and all(float(x) == 64 for x in maximums)
     result.update(contexts=contexts, simulation_us=result['runtime_cycles']/1000,
                   read_bytes=1024**3, aggregate_GBps=1024**3/result['runtime_cycles'],
@@ -69,7 +69,7 @@ def main():
                         help='Results JSON (default: %(default)s)')
     parser.add_argument('--reuse', action='store_true', help='Verify and reuse existing complete logs')
     args = parser.parse_args()
-    config = Path(os.environ.get('DRAMSYS_PATH', ROOT/'core/models/memory'))/'dramsys_configs/hbm4-emu-example.json'
+    config = Path(os.environ.get('DRAMSYS_PATH', ROOT/'core/models/memory'))/'dramsys_configs/hbm4-emu-fast.json'
     # The installed runner prepends install/lib to the configured loader path.
     search = [ROOT/'install/lib']
     search += [Path(p) for p in os.environ.get('LD_LIBRARY_PATH', '').split(':') if p]

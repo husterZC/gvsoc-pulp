@@ -44,11 +44,23 @@ library in `third_party/DRAMSys`, and the configurations in
 library must describe a compatible pair. The endpoint uses the same DRAMSys
 library API as GVSoC's `memory.dramsys` model.
 
-The HBM4 target selects `hbm4-emu-example.json` from this shared configuration
-through `dram_type`. An existing `DRAMSYS_PATH` override is honored, with the
+The HBM4 network and endpoint targets select `hbm4-emu-fast.json` from this
+shared configuration through `dram_type`. It uses `simconfig/fast.json`, which
+disables `DatabaseRecording`, `EnableWindowing` and `SimulationProgressBar`.
+It uses the same memory timings, controller and address mapping as
+`hbm4-emu-example.json`, and retains data storage for correctness checks.
+Select `--parameter=dram_type=hbm4-emu-example.json` to enable the original
+instrumentation. An existing `DRAMSYS_PATH` override is honored, with the
 same meaning as for `memory.dramsys`: it names the **parent** of `dramsys_configs`.
 The `doc/` directory contains Markdown documentation only; runtime configuration
 comes from the shared DRAMSys setup above.
+
+When updating an existing checkout, refresh the shared configurations before
+building the targets; this does not rebuild the DRAMSys library:
+
+```bash
+make -B build-configs
+```
 
 ## 3. Build the targets
 
@@ -180,7 +192,7 @@ for terminal in range(32 * 32):
 ```
 
 For HBM4, replace the memory constructor with
-`DramsysEndpoint(self, name, dram_type='hbm4-emu-example.json', data_width=512)`
+`DramsysEndpoint(self, name, dram_type='hbm4-emu-fast.json', data_width=512)`
 from `pulp.3d_network.dramsys_endpoint`. No `read_slots` argument is used.
 The NoC derives native packet widths from its AXI configuration. Memory service
 and capacity remain in the endpoint.

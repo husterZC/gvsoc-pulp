@@ -21,7 +21,7 @@ class Chip(gvsoc.systree.Component):
             dram = importlib.import_module('pulp.3d_network.dramsys_endpoint').DramsysEndpoint
             memory = dram(self, 'memory', data_width=512,
                           dram_type=TargetParameter(self, name='dram_type',
-                              value='hbm4-emu-example.json', cast=str,
+                              value='hbm4-emu-fast.json', cast=str,
                               description='DRAMSys simulation JSON').get_value(),
                           benchmark_init=True, init_size=32768)
             # Include both implementations so hbm=0 works after installation.

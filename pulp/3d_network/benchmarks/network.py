@@ -24,7 +24,7 @@ class Chip(gvsoc.systree.Component):
         if p['fabric'] not in (0, 1, 2):
             raise ValueError('fabric must be 0 (fat tree), 1 (mesh), or 2 (crossbar)')
         if p['i3d'] and p['endpoint'] == 3:
-            dram_type = TargetParameter(self, name='dram_type', value='hbm4-emu-example.json',
+            dram_type = TargetParameter(self, name='dram_type', value='hbm4-emu-fast.json',
                                        cast=str, description='DRAMSys simulation JSON').get_value()
         clock = vp.clock_domain.Clock_domain(self, 'clock', frequency=p['frequency'])
         # Include the RAM endpoint when building the default native target so
