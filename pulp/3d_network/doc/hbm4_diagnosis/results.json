@@ -1,0 +1,843 @@
+{
+  "date": "2026-09-26",
+  "status": "PASS",
+  "production_sources_match_original_report": [
+    "dramsys_endpoint.cpp",
+    "memory_endpoint.cpp",
+    "memory_endpoint.hpp",
+    "interconnect.cpp",
+    "interconnect.py",
+    "network.hpp",
+    "soc.hpp"
+  ],
+  "network_parameters": {
+    "fabric": 0,
+    "mode": 1,
+    "nx": 32,
+    "ny": 32,
+    "frequency": 1000000000,
+    "addrwidth": 64,
+    "datawidth": 512,
+    "burst": 16,
+    "sc": 8,
+    "mc": 8,
+    "interleave_bytes": 4096,
+    "memory_bytes": 4096,
+    "offset": 0,
+    "backing": 0
+  },
+  "direct_parameters": {
+    "frequency": 1000000000,
+    "datawidth": 512,
+    "burst": 16,
+    "address": 0,
+    "consumer_backpressure": false
+  },
+  "source_and_library_sha256": {
+    "pulp/pulp/3d_network/dramsys_endpoint.cpp": "ee3b398f56c39aa348b8f16f47df370ba59e5c2247c8ffde04c3d2515c8bc09a",
+    "pulp/pulp/3d_network/memory_endpoint.cpp": "6aecf9939e227dd5255d6137001c0f8bd5b7adb458f726be77aade898f61f31d",
+    "pulp/pulp/3d_network/memory_endpoint.hpp": "80f84aae3477a465e13b03f9f552a3a6dd219ddfa1b4169d9f07599b559cad05",
+    "pulp/pulp/3d_network/interconnect.cpp": "3fa8015a7d8d7fb88fb4791b2f28e4c25fe516d629729e3ec74aa04422433d17",
+    "pulp/pulp/3d_network/interconnect.py": "0f65bf8b101685fdb08d2bab444d35fd28773022d10d3fa3512d02af6369c46b",
+    "pulp/pulp/3d_network/network.hpp": "1760af5575d77a6d4716986741ec5d6965f3d173df58361c01f5dd1a4c40ae8f",
+    "pulp/pulp/3d_network/soc.hpp": "d2e33d559fbbba7969dec3f9ba2143f0717d8426276c899ce9816f5a9bf7b065",
+    "pulp/pulp/3d_network/tests/endpoint_bandwidth.cpp": "d432408d35e605505537191f0f72d97c84d8045746da3337438d7b4ad615e6ba",
+    "pulp/pulp/3d_network/tests/endpoint_bandwidth.py": "535d6b5232f22b611e796c3c7deac89e0aa1b114feed8e69192b9a1edf158bda",
+    "pulp/pulp/3d_network/tests/hbm4_probe.py": "05a072594bca0645cc15a2d3b3c9571eb803a8a109256604874be52b60e8eda8",
+    "pulp/pulp/3d_network/tests/driver.cpp": "bc0d8ffb03872736cadff77ddc8ecddb3a33a03432fdebecde9d99d7fe939d4b",
+    "pulp/pulp/3d_network/tests/benchmark.py": "a4bed725146c0e874cf36b45b8a039cfd034aae46a55b802500002b754cd6563",
+    "build/network3d_hbm4_diagnostics/dramsys_endpoint_probe.cpp": "42c970b8faded59f534e03f944d6a0e5cc1a071825bd155fcb9b087e34b25b43",
+    "add_dramsyslib_patches/libDRAMSys_Simulator.so": "25332be7dd125a4ccfb3adb0b68806b499547c55f81b9cfb411d6981478006d7",
+    "build/network3d_hbm4_burst_routing_x8/dramsys-build/lib/libDRAMSys_Simulator.so": "6f0ff25d930a34ba4b5bd0c8d585d04822a5e911251e4c6edea2aa31b995e18f"
+  },
+  "config_sha256": {
+    "build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json": "a4721680557ffa7498994a8574138f6544691dfbac723c7afefe10d66474cc5a",
+    "build/network3d_hbm4/dramsys_configs/manifest.json": "f637b9cf8e48427948f8f0a4524519de4957cc1b206daab84707ea1c93377e16",
+    "build/network3d_hbm4/dramsys_configs/addressmapping/am_hbm4_emu_16Gb_pc_brc.json": "8e31174768b41299bf864599b304324e494e259d5c17a7d852400de78d32f031",
+    "build/network3d_hbm4/dramsys_configs/mcconfig/fr_fcfs_hbm4.json": "eb66863f81fc7903bea75eedb8d6e2ad09cdf7244787a8586e25d79155fb043c",
+    "build/network3d_hbm4/dramsys_configs/memspec/HBM4-emulation-4000.json": "b605427a78372c60af76024e4e6fc5b207ae889f407b30698add2bcd451d5264",
+    "build/network3d_hbm4/dramsys_configs/simconfig/example.json": "4373f4ac98894d621259e0be42483559cf40505131a6558069a3237ecb245cf8"
+  },
+  "note": "Full FIFO and RR HBM runs used the indexed library and ran concurrently; compare modeled cycles, not their host wall times. All isolated tests used the original library. The 8x8 RR check matches original and indexed libraries with reference-verification enabled.",
+  "measurements": [
+    {
+      "name": "direct_hbm_long_no_refresh_w8",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 65536,
+        "window": 8,
+        "burst": 16,
+        "cycles": 1048588,
+        "first_response_cycles": 13,
+        "GBps": 63.999268,
+        "steady_GBps": 64.0,
+        "steady_cycles": 786432,
+        "beats": 1048576,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 0,
+        "peak": 8
+      },
+      "log": "direct_hbm_long_no_refresh_w8.log.gz",
+      "log_sha256": "de903353f21ad03511f5b3417b5c4c5b864da5ffcbb52fdec30dca1691241e90",
+      "endpoint_totals": {
+        "read_requests": 65536,
+        "write_requests": 0,
+        "native_reads": 2097152,
+        "native_writes": 0,
+        "read_bytes": 67108864,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 8,
+      "library": "original",
+      "refresh": "NoRefresh (diagnostic control)"
+    },
+    {
+      "name": "direct_hbm_long_w2",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 65536,
+        "window": 2,
+        "burst": 16,
+        "cycles": 1148135,
+        "first_response_cycles": 13,
+        "GBps": 58.450325,
+        "steady_GBps": 57.766152,
+        "steady_cycles": 871300,
+        "beats": 1048576,
+        "gap_cycles": 99547,
+        "max_gap": 70,
+        "request_denials": 0,
+        "peak": 2
+      },
+      "log": "direct_hbm_long_w2.log.gz",
+      "log_sha256": "5d41d23e5bb6fb4b37d0a6273571121a0313c2016e35b62ce5e9e6514d8d4fd9",
+      "endpoint_totals": {
+        "read_requests": 65536,
+        "write_requests": 0,
+        "native_reads": 2097152,
+        "native_writes": 0,
+        "read_bytes": 67108864,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 2,
+      "library": "original",
+      "refresh": "AllBank (original)"
+    },
+    {
+      "name": "direct_hbm_long_w8",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 65536,
+        "window": 8,
+        "burst": 16,
+        "cycles": 1101298,
+        "first_response_cycles": 13,
+        "GBps": 60.936154,
+        "steady_GBps": 60.540466,
+        "steady_cycles": 831372,
+        "beats": 1048576,
+        "gap_cycles": 52710,
+        "max_gap": 70,
+        "request_denials": 0,
+        "peak": 8
+      },
+      "log": "direct_hbm_long_w8.log.gz",
+      "log_sha256": "0ce09625fd580f89206f7de134de8c14359a14114ba01ce3522beeb425fc52d4",
+      "endpoint_totals": {
+        "read_requests": 65536,
+        "write_requests": 0,
+        "native_reads": 2097152,
+        "native_writes": 0,
+        "read_bytes": 67108864,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 8,
+      "library": "original",
+      "refresh": "AllBank (original)"
+    },
+    {
+      "name": "direct_hbm_w1",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 4096,
+        "window": 1,
+        "burst": 16,
+        "cycles": 102469,
+        "first_response_cycles": 13,
+        "GBps": 40.932419,
+        "steady_GBps": 40.96,
+        "steady_cycles": 76800,
+        "beats": 65536,
+        "gap_cycles": 36921,
+        "max_gap": 75,
+        "request_denials": 0,
+        "peak": 1
+      },
+      "log": "direct_hbm_w1.log.gz",
+      "log_sha256": "70820ba602b2d07753eff4058f7c1e03eaef0c1e399937ca3057faee91533df3",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 1,
+      "library": "original",
+      "refresh": "AllBank (original)",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=hbm=1",
+          "--parameter=window=1"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "endpoint_bandwidth",
+          "SYSTEMC_HOME": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/add_dramsyslib_patches/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/direct_hbm_w1"
+        }
+      }
+    },
+    {
+      "name": "direct_hbm_w16",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 4096,
+        "window": 16,
+        "burst": 16,
+        "cycles": 65548,
+        "first_response_cycles": 13,
+        "GBps": 63.988283,
+        "steady_GBps": 64.0,
+        "steady_cycles": 49152,
+        "beats": 65536,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 0,
+        "peak": 16
+      },
+      "log": "direct_hbm_w16.log.gz",
+      "log_sha256": "229d04dc84ebe3ca661e84dd14304f39b4e14d852567fcf5cbfe8297f9ec042c",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 16,
+      "library": "original",
+      "refresh": "AllBank (original)",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=hbm=1",
+          "--parameter=window=16"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "endpoint_bandwidth",
+          "SYSTEMC_HOME": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/add_dramsyslib_patches/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/direct_hbm_w16"
+        }
+      }
+    },
+    {
+      "name": "direct_hbm_w2",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 4096,
+        "window": 2,
+        "burst": 16,
+        "cycles": 65548,
+        "first_response_cycles": 13,
+        "GBps": 63.988283,
+        "steady_GBps": 64.0,
+        "steady_cycles": 49152,
+        "beats": 65536,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 0,
+        "peak": 2
+      },
+      "log": "direct_hbm_w2.log.gz",
+      "log_sha256": "ba55d0a55c95e53f3295324e0285fa5cf3bde64b562593a88dc593bc4fddf15c",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 2,
+      "library": "original",
+      "refresh": "AllBank (original)",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=hbm=1",
+          "--parameter=window=2"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "endpoint_bandwidth",
+          "SYSTEMC_HOME": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/add_dramsyslib_patches/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/direct_hbm_w2"
+        }
+      }
+    },
+    {
+      "name": "direct_hbm_w4",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 4096,
+        "window": 4,
+        "burst": 16,
+        "cycles": 65548,
+        "first_response_cycles": 13,
+        "GBps": 63.988283,
+        "steady_GBps": 64.0,
+        "steady_cycles": 49152,
+        "beats": 65536,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 0,
+        "peak": 4
+      },
+      "log": "direct_hbm_w4.log.gz",
+      "log_sha256": "7309d11a8a363646711a7916ff569a27416ceafbc2474d6b90d8bae9833c357d",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 4,
+      "library": "original",
+      "refresh": "AllBank (original)",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=hbm=1",
+          "--parameter=window=4"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "endpoint_bandwidth",
+          "SYSTEMC_HOME": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/add_dramsyslib_patches/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/direct_hbm_w4"
+        }
+      }
+    },
+    {
+      "name": "direct_hbm_w8",
+      "result": {
+        "status": "PASS",
+        "hbm": 1,
+        "count": 4096,
+        "window": 8,
+        "burst": 16,
+        "cycles": 65548,
+        "first_response_cycles": 13,
+        "GBps": 63.988283,
+        "steady_GBps": 64.0,
+        "steady_cycles": 49152,
+        "beats": 65536,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 0,
+        "peak": 8
+      },
+      "log": "direct_hbm_w8.log.gz",
+      "log_sha256": "032c2c4c6b0695897e0b55c069c24c05f20ba118d4c6c18e3de0c08654a80cdb",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 0,
+        "pending": 0
+      },
+      "channel_count": 1,
+      "peak_reads_max": 8,
+      "library": "original",
+      "refresh": "AllBank (original)"
+    },
+    {
+      "name": "direct_simple_w1",
+      "result": {
+        "status": "PASS",
+        "hbm": 0,
+        "count": 4096,
+        "window": 1,
+        "burst": 16,
+        "cycles": 65536,
+        "first_response_cycles": 1,
+        "GBps": 64.0,
+        "steady_GBps": 64.0,
+        "steady_cycles": 49152,
+        "beats": 65536,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 0,
+        "peak": 1
+      },
+      "log": "direct_simple_w1.log.gz",
+      "log_sha256": "f4b9799151851354a0f6c65ec0e288aafc73e67d8dab99b0b727bec2d8223bbe",
+      "library": "original",
+      "refresh": "AllBank (original)",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=hbm=0",
+          "--parameter=window=1"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "endpoint_bandwidth",
+          "SYSTEMC_HOME": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/add_dramsyslib_patches/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/direct_simple_w1"
+        }
+      }
+    },
+    {
+      "name": "direct_simple_w8",
+      "result": {
+        "status": "PASS",
+        "hbm": 0,
+        "count": 4096,
+        "window": 8,
+        "burst": 16,
+        "cycles": 65536,
+        "first_response_cycles": 1,
+        "GBps": 64.0,
+        "steady_GBps": 64.0,
+        "steady_cycles": 49152,
+        "beats": 65536,
+        "gap_cycles": 0,
+        "max_gap": 0,
+        "request_denials": 4092,
+        "peak": 4
+      },
+      "log": "direct_simple_w8.log.gz",
+      "log_sha256": "b5523ba58a1c131f0eaa62d9155ddc45f2be01bac0e4af29a8dc8bdf31a7f273",
+      "library": "original",
+      "refresh": "AllBank (original)",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=hbm=0",
+          "--parameter=window=8"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "endpoint_bandwidth",
+          "SYSTEMC_HOME": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/add_dramsyslib_patches/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/direct_simple_w8"
+        }
+      }
+    },
+    {
+      "name": "network_fifo_check",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 195.5,
+        "injection_cycles": 160.5,
+        "drain_cycles": 35.0,
+        "transactions": 160,
+        "peak_outstanding": 16,
+        "wall_seconds": 0.002019147,
+        "workload_checksum": "2d289d0d32c21f65"
+      },
+      "log": "network_fifo_check.log.gz",
+      "log_sha256": "ffefea397003fb80527d42620be7c2b23ba882fedb99798828a97fead7d13aae",
+      "endpoint_totals": {
+        "read_requests": 48,
+        "write_requests": 32,
+        "native_reads": 144,
+        "native_writes": 128,
+        "read_bytes": 4144,
+        "write_bytes": 4096,
+        "request_denials": 0,
+        "response_denials": 112,
+        "pending": 0
+      },
+      "channel_count": 16,
+      "peak_reads_max": 1,
+      "probe": {
+        "channel_count": 16,
+        "mean_blocked_ns": 0.0,
+        "mean_span_ns": 127.875,
+        "mean_blocked_fraction_of_endpoint_span": 0.0
+      },
+      "library": "indexed",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=response_rr=0",
+          "--parameter=progress_cycles=8192",
+          "--parameter=fabric=1",
+          "--parameter=nx=4",
+          "--parameter=ny=4",
+          "--parameter=functional=1",
+          "--parameter=stress=1"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "hbm4_probe",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8/dramsys-build/lib/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_PROBE_SOURCE": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/dramsys_endpoint_probe.cpp",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/network_fifo_check"
+        }
+      }
+    },
+    {
+      "name": "network_fifo_full",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 71050.5,
+        "injection_cycles": 70927.5,
+        "drain_cycles": 123.0,
+        "transactions": 1048576,
+        "peak_outstanding": 8192,
+        "wall_seconds": 546.636636254,
+        "workload_checksum": "0dd0ea75ed6e0325"
+      },
+      "log": "network_fifo_full.log.gz",
+      "log_sha256": "b1a9e896a39a84725a3da8902b0388b6dec1350185bfc673a793cfcdc8d8f10e",
+      "endpoint_totals": {
+        "read_requests": 1048576,
+        "write_requests": 0,
+        "native_reads": 33554432,
+        "native_writes": 0,
+        "read_bytes": 1073741824,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 16777216,
+        "pending": 0
+      },
+      "channel_count": 1024,
+      "peak_reads_max": 8,
+      "probe": {
+        "channel_count": 1024,
+        "mean_blocked_ns": 44049.3310546875,
+        "mean_span_ns": 70147.751953125,
+        "mean_blocked_fraction_of_endpoint_span": 0.6279607105077758
+      },
+      "mean_useful_GBps": 14.758179041667546,
+      "library": "indexed",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=response_rr=0",
+          "--parameter=progress_cycles=8192"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "hbm4_probe",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8/dramsys-build/lib/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_PROBE_SOURCE": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/dramsys_endpoint_probe.cpp",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/network_fifo_full"
+        }
+      }
+    },
+    {
+      "name": "network_rr_8x8_indexed_verify",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 6530.5,
+        "injection_cycles": 5601.5,
+        "drain_cycles": 929.0,
+        "transactions": 4096,
+        "peak_outstanding": 512,
+        "wall_seconds": 1.020206185,
+        "workload_checksum": "40b05755b71a6725"
+      },
+      "log": "network_rr_8x8_indexed_verify.log.gz",
+      "log_sha256": "fc09d1730affb5d3eaa71effd6a5e50760a39e6749bd945886be81dea04f9e2a",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 65536,
+        "pending": 0
+      },
+      "channel_count": 64,
+      "peak_reads_max": 8,
+      "probe": {
+        "channel_count": 64,
+        "mean_blocked_ns": 2220.4375,
+        "mean_span_ns": 5265.140625,
+        "mean_blocked_fraction_of_endpoint_span": 0.4207113127310094
+      },
+      "library": "indexed, verifier enabled"
+    },
+    {
+      "name": "network_rr_8x8_original",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 6530.5,
+        "injection_cycles": 5601.5,
+        "drain_cycles": 929.0,
+        "transactions": 4096,
+        "peak_outstanding": 512,
+        "wall_seconds": 0.881375166,
+        "workload_checksum": "40b05755b71a6725"
+      },
+      "log": "network_rr_8x8_original.log.gz",
+      "log_sha256": "c419b83a328c1be0030e4d259c37b93fb61ed9805927a8c656b750aec2c89438",
+      "endpoint_totals": {
+        "read_requests": 4096,
+        "write_requests": 0,
+        "native_reads": 131072,
+        "native_writes": 0,
+        "read_bytes": 4194304,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 65536,
+        "pending": 0
+      },
+      "channel_count": 64,
+      "peak_reads_max": 8,
+      "probe": {
+        "channel_count": 64,
+        "mean_blocked_ns": 2220.4375,
+        "mean_span_ns": 5265.140625,
+        "mean_blocked_fraction_of_endpoint_span": 0.4207113127310094
+      },
+      "library": "original"
+    },
+    {
+      "name": "network_rr_check",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 195.5,
+        "injection_cycles": 160.5,
+        "drain_cycles": 35.0,
+        "transactions": 160,
+        "peak_outstanding": 16,
+        "wall_seconds": 0.002042391,
+        "workload_checksum": "2d289d0d32c21f65"
+      },
+      "log": "network_rr_check.log.gz",
+      "log_sha256": "6d018e6831fd45dcb44cab7a5d41886a480c4dac2a320b008cf46388b8751a49",
+      "endpoint_totals": {
+        "read_requests": 48,
+        "write_requests": 32,
+        "native_reads": 144,
+        "native_writes": 128,
+        "read_bytes": 4144,
+        "write_bytes": 4096,
+        "request_denials": 0,
+        "response_denials": 112,
+        "pending": 0
+      },
+      "channel_count": 16,
+      "peak_reads_max": 1,
+      "probe": {
+        "channel_count": 16,
+        "mean_blocked_ns": 0.0,
+        "mean_span_ns": 127.875,
+        "mean_blocked_fraction_of_endpoint_span": 0.0
+      },
+      "library": "indexed",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=response_rr=1",
+          "--parameter=progress_cycles=8192",
+          "--parameter=fabric=1",
+          "--parameter=nx=4",
+          "--parameter=ny=4",
+          "--parameter=functional=1",
+          "--parameter=stress=1"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "hbm4_probe",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8/dramsys-build/lib/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_PROBE_SOURCE": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/dramsys_endpoint_probe.cpp",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/network_rr_check"
+        }
+      }
+    },
+    {
+      "name": "network_rr_full",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 56991.5,
+        "injection_cycles": 56847.5,
+        "drain_cycles": 144.0,
+        "transactions": 1048576,
+        "peak_outstanding": 8192,
+        "wall_seconds": 521.391416348,
+        "workload_checksum": "0dd0ea75ed6e0325"
+      },
+      "log": "network_rr_full.log.gz",
+      "log_sha256": "07b3031d632bc0e45052a2d7acc59a68c3b46b4f3a7624781176a052ff16672d",
+      "endpoint_totals": {
+        "read_requests": 1048576,
+        "write_requests": 0,
+        "native_reads": 33554432,
+        "native_writes": 0,
+        "read_bytes": 1073741824,
+        "write_bytes": 0,
+        "request_denials": 0,
+        "response_denials": 16777216,
+        "pending": 0
+      },
+      "channel_count": 1024,
+      "peak_reads_max": 8,
+      "probe": {
+        "channel_count": 1024,
+        "mean_blocked_ns": 32846.1494140625,
+        "mean_span_ns": 56248.4833984375,
+        "mean_blocked_fraction_of_endpoint_span": 0.5839635058466321
+      },
+      "mean_useful_GBps": 18.398813858206925,
+      "library": "indexed",
+      "command": {
+        "argv": [
+          "bash",
+          "pulp/pulp/3d_network/tests/run.sh",
+          "--parameter=response_rr=1",
+          "--parameter=progress_cycles=8192"
+        ],
+        "environment": {
+          "LD_LIBRARY_PATH": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/systemc/lib64",
+          "NETWORK3D_BUILD_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8",
+          "NETWORK3D_TARGET": "hbm4_probe",
+          "NETWORK3D_DRAMSYS_CONFIG": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4/dramsys_configs/hbm4-emu-example.json",
+          "NETWORK3D_DRAMSYS_LIBRARY": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_burst_routing_x8/dramsys-build/lib/libDRAMSys_Simulator.so",
+          "PYTHON": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d/venv/bin/python",
+          "NETWORK3D_PROBE_SOURCE": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/dramsys_endpoint_probe.cpp",
+          "NETWORK3D_RUN_DIR": "/scratch2/chi/3D-Fattree/Modeling/gvsoc/build/network3d_hbm4_diagnostics/network_rr_full"
+        }
+      }
+    },
+    {
+      "name": "simple_rr4",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 57035.5,
+        "injection_cycles": 56931.5,
+        "drain_cycles": 104.0,
+        "transactions": 1048576,
+        "peak_outstanding": 8192,
+        "wall_seconds": 28.568475987,
+        "workload_checksum": "0dd0ea75ed6e0325"
+      },
+      "log": "simple_rr4.log.gz",
+      "log_sha256": "279f07bcbaaf465b723da3e01ee05dd209674030f3f9cd00a5845bafa56541cf",
+      "log_note": "Result line captured from the original tool stdout; this run was not redirected to a log.",
+      "library": "not used"
+    },
+    {
+      "name": "simple_rr8",
+      "result": {
+        "status": "PASS",
+        "runtime_cycles": 55714.5,
+        "injection_cycles": 55595.5,
+        "drain_cycles": 119.0,
+        "transactions": 1048576,
+        "peak_outstanding": 8192,
+        "wall_seconds": 31.513132617,
+        "workload_checksum": "0dd0ea75ed6e0325"
+      },
+      "log": "simple_rr8.log.gz",
+      "log_sha256": "a990404ddc108e5b9175172d14ae464e46db407918e342e9b39a1733a0fa6c59",
+      "library": "not used"
+    }
+  ]
+}
