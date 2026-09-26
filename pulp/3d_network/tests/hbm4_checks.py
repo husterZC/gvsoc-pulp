@@ -50,6 +50,10 @@ def main():
         run(f'functional_width{width}', functional=1, stress=1, datawidth=width)
     base = run('b16_default')
     run('b16_stress_8x8', nx=8, ny=8, stress=1)
+    run('b16_xbar_8x8', fabric=2, nx=8, ny=8, stress=1)
+    run('functional_xbar', fabric=2, nx=3, ny=2, functional=1, stress=1, datawidth=512)
+    run('b256_xbar', fabric=2, burst=256, stress=1,
+        interleave_bytes=32768, memory_bytes=32768)
     for name in ('slow_clock','small_queues'):
         dest = build/'checks'/name/'dramsys_configs'
         shutil.copytree(original.parent,dest,dirs_exist_ok=True)

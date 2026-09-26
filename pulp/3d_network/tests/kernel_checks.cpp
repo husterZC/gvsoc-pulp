@@ -32,8 +32,95 @@ static void native(network3d::Config config) {
     require(net.occupancy()==0,"native trailing data");
 }
 
-static void mixed_soc() {
-    network3d::SocConfig config; config.network.fabric=1;
+static void xbar_pipeline(int ports,int spill) {
+    network3d::Config cfg; cfg.fabric=2; cfg.num_x=ports; cfg.num_y=1; cfg.io_spill=spill;
+    network3d::Network net(cfg);
+    require(net.router_count()==1,"crossbar must be a single switch");
+    const int beats=12,latency=2*spill;
+    for (int cycle=0;cycle<beats+latency;++cycle) {
+        for (int dst=0;dst<ports;++dst) {
+            auto p=net.peek(dst);
+            require(bool(p)==(cycle>=latency),"crossbar pipeline latency/bandwidth");
+            if (p) {
+                int src=(dst+ports-1)%ports,seq=cycle-latency;
+                require(p->src==src && p->dst==dst && p->seq==seq &&
+                        p->id==uint64_t(src)*beats+seq,"crossbar permutation delivery");
+                net.take(dst);
+            }
+        }
+        if (cycle<beats) for (int src=0;src<ports;++src) {
+            network3d::Packet p; p.src=src; p.dst=(src+1)%ports; p.seq=cycle;
+            p.id=uint64_t(src)*beats+cycle;
+            require(net.offer(src,p),"crossbar failed one packet/input/cycle");
+        }
+        net.step();
+    }
+    require(!net.occupancy(),"crossbar permutation did not drain");
+}
+
+static void xbar_contention() {
+    const int ports=65,beats=3;
+    network3d::Config cfg; cfg.fabric=2; cfg.num_x=ports; cfg.num_y=1; cfg.io_spill=1;
+    network3d::Network net(cfg);
+    std::vector<int> sent(ports,0);
+    int received=0; bool held=false; uint64_t held_id=0;
+    for (int cycle=0;received<ports*beats;++cycle) {
+        require(cycle<2000,"crossbar contention starvation");
+        if (auto p=net.peek(0)) {
+            if (held) require(p->id==held_id,"crossbar changed a stalled output");
+            held=cycle<12 || cycle%3==0; held_id=p->id;
+            if (!held) {
+                require(p->src==received%ports && p->seq==received/ports,
+                        "crossbar arbitration lost fairness or source order");
+                net.take(0); ++received;
+            }
+        } else require(!held,"crossbar withdrew a stalled output");
+        for (int src=0;src<ports;++src) if (sent[src]<beats) {
+            network3d::Packet p; p.src=src; p.dst=0; p.seq=sent[src];
+            p.id=uint64_t(src)*beats+p.seq;
+            if (net.offer(src,p)) ++sent[src];
+        }
+        net.step();
+    }
+    require(!net.occupancy(),"crossbar contention did not drain");
+}
+
+static void xbar_locks() {
+    network3d::Config cfg; cfg.fabric=2; cfg.num_x=4; cfg.num_y=1; cfg.io_spill=1;
+    network3d::Network net(cfg);
+    auto send=[&](int src,int dst,uint64_t id) {
+        network3d::Packet p; p.src=src; p.dst=dst; p.id=id;
+        require(net.offer(src,p),"crossbar lock test admission");
+    };
+    auto receive=[&](int dst,uint64_t id) {
+        auto p=net.peek(dst);
+        require(p && p->id==id,"crossbar output/lock selection"); net.take(dst);
+    };
+    auto block=[&]() {
+        send(1,0,10); net.step();
+        send(1,0,11); net.step();
+        send(2,0,20); net.step();
+        net.step(); // Output 0 is full; lock the request set containing input 2.
+    };
+    block();
+    send(0,0,0); receive(0,10); net.step();
+    receive(0,11); net.step(); // Late input 0 must not preempt locked input 2.
+    receive(0,20); net.step();
+    receive(0,0); net.step();
+    require(!net.occupancy(),"crossbar lock test did not drain");
+
+    net.reset(); block();
+    send(3,2,32); net.step(); net.step();
+    receive(2,32); net.step(); // Blocked output 0 cannot stop another output.
+    net.reset();
+    require(!net.occupancy() && !net.peek(0),"crossbar reset kept buffered packets");
+    send(0,0,100); net.step(); net.step();
+    receive(0,100); net.step(); // Reset must also discard the locked request set.
+    require(!net.occupancy(),"crossbar reset kept arbitration state");
+}
+
+static void mixed_soc(int fabric) {
+    network3d::SocConfig config; config.network.fabric=fabric;
     config.network.num_x=3; config.network.num_y=2;
     config.source_contexts=3; config.memory_contexts=2;
     config.memory_base=uint64_t(1)<<32; config.axi_addr_width=64;
@@ -77,7 +164,7 @@ static void mixed_soc() {
     soc.step(); soc.step(); require(!soc.outstanding(),"zero-size transaction hung");
 }
 
-static void endpoint() {
+static void endpoint(int fabric) {
     using namespace network3d;
     MemoryEndpointTiming memory(2);
     MemoryRequest a,b,c; a.beats=2; b.beats=1; c.beats=1;
@@ -109,7 +196,7 @@ static void endpoint() {
 
     // The network must wait indefinitely for an external memory response; it
     // cannot synthesize one using an internal latency or read-slot scheduler.
-    SocConfig cfg; cfg.network.fabric=1; cfg.network.num_x=cfg.network.num_y=1;
+    SocConfig cfg; cfg.network.fabric=fabric; cfg.network.num_x=cfg.network.num_y=1;
     Soc soc(cfg); Transaction tx; tx.size=8;
     bool issued=false,done=false;
     soc.issue=[&](auto &,int sequence) { require(sequence==-1,"unexpected W"); issued=true; return true; };
@@ -125,12 +212,15 @@ static void endpoint() {
 int main() try {
     for (int spill:{1,2,3}) {
         network3d::Config c; c.fabric=1; c.num_x=3; c.num_y=2; c.io_spill=spill; native(c);
+        c.fabric=2; native(c);
+        for (int ports:{1,6,33,64,1024}) xbar_pipeline(ports,spill);
     }
     for (int mode=0;mode<3;++mode) {
         network3d::Config c; c.routing_mode=mode; native(c);
     }
     network3d::Config c; c.num_levels=4;
     auto shape=network3d::Network::fattree_shape(4); c.num_x=shape.first; c.num_y=shape.second;
-    native(c); mixed_soc(); endpoint();
-    std::cout<<"KERNEL_CHECKS_PASS: stalls, reset, levels, spills, mixed R/W, 64-bit map, external endpoint\n";
+    native(c); xbar_contention(); xbar_locks();
+    for (int fabric:{1,2}) { mixed_soc(fabric); endpoint(fabric); }
+    std::cout<<"KERNEL_CHECKS_PASS: stalls, reset, levels, spills, crossbar latency/throughput/arbitration, mixed R/W, external endpoint\n";
 } catch (const std::exception &e) { std::cerr<<e.what()<<"\n"; return 1; }

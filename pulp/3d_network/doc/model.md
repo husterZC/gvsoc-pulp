@@ -26,8 +26,10 @@ noc.o_OUTPUT(0, memory.i_INPUT())
 
 Bind each needed terminal in the same way. Terminal number is `x * num_y + y`.
 An unbound output returns `IO_RESP_INVALID`. `FatTreeInterconnect` derives
-dimensions from `num_levels`; `MeshInterconnect` takes `num_x`, `num_y`, and
-`io_spill` explicitly. See [benchmarks/network.py](../benchmarks/network.py) for a
+dimensions from `num_levels`; `MeshInterconnect` and `XbarInterconnect` take
+`num_x`, `num_y`, and `io_spill` explicitly. The crossbar has `num_x * num_y`
+paired ports, using the same terminal numbering. See
+[benchmarks/network.py](../benchmarks/network.py) for a
 complete target with masters and memories at every terminal.
 
 `MemoryEndpoint` is a separate component. It owns storage and memory service;
@@ -42,11 +44,11 @@ when connecting components in different clock domains.
 
 | Python argument | RTL parameter / meaning | Default |
 |---|---|---|
-| `fabric` | `Fabric`: 0 fat tree, 1 mesh (SoC only) | 0 |
+| `fabric` | SoC fabric: 0 fat tree, 1 mesh, 2 crossbar | 0 |
 | `num_x`, `num_y` | `NumX`, `NumY` | 32, 32 |
 | `num_levels` | `NumLevels`, radix-16 fat tree | 3 |
-| `routing_mode` | `RoutingMode`: LCA, hash, adaptive | 1 |
-| `io_spill` | `NumIOSpill` / `MeshIOSpill`; fat tree fixes this at 2 | 2 |
+| `routing_mode` | Fat-tree `RoutingMode`: LCA, hash, adaptive; unused for mesh/crossbar | 1 |
+| `io_spill` | Input/output spill stages for mesh/crossbar; fat tree fixes this at 2 | 2 |
 | `addr_width`, `data_width` | Native packet address/data widths, bits | 32, 64 |
 | `axi_addr_width`, `axi_data_width` | `AXIAddrWidth`, `AXIDataWidth`, bits | 32, 64 |
 | `axi_id_width`, `axi_len_width` | `AXIIdWidth`, `AXILenWidth`, bits | 10, 8 |
@@ -67,7 +69,7 @@ Memory endpoint parameters:
 it limits destination NI transaction contexts, independently of the memory's
 read slots. `memory_bytes` describes address decoding, not integrated storage.
 
-Positive mesh dimensions and 1–32 spill stages are supported. The fat tree
+Positive mesh/crossbar dimensions and 1–32 spill stages are supported. The fat tree
 supports levels 3–6, with dimensions derived from the RTL expansion rules;
 the practical allocation limit is one million terminals. Large SoC context
 counts and terminal counts consume correspondingly more host memory. These
@@ -79,6 +81,27 @@ padding the RTL `NocAddrWidth`/`NocDataWidth` has no timing effect. Request
 identity replaces physical AXI ID encoding; distinct live IO_v2 objects are
 distinct transactions. The AXI ID-width setting does not limit those object
 identities or impose same-ID ordering.
+
+### Crossbar timing
+
+`XbarInterconnect` models a fully connected packet switch. To use it inside the
+SoC interconnect, set `SocInterconnect(..., fabric=2)`. Each input can send at
+most one packet per cycle and each output can receive at most one packet per
+cycle; different outputs arbitrate independently. The SoC's reservation, grant,
+request and response packets use this same fabric.
+
+The timing contract follows `common_cells.stream_xbar` with `OutSpillReg=0`,
+`LockIn=1` and fair `rr_arb_tree` arbitration, surrounded by `io_spill` registered
+spill stages on each side. Each spill stage holds two packets and has no ready
+bypass when full. An uncontended path crosses `2 * io_spill` registered stages,
+with no additional switch stage. A stalled output retains its selected packet
+and request set. Input queues are FIFO, so a blocked head can delay later
+packets at that input even if their destinations are ready.
+
+`num_levels` and `routing_mode` do not change crossbar behavior. Crossbar
+arbitration takes O(N) work per active cycle and its storage is O(N * io_spill),
+where N is the terminal count. The RTL repository's SoC wrapper currently
+supports fat tree and mesh; this crossbar is an additional GVSoC topology.
 
 ### IO_v2 contract
 
@@ -146,10 +169,14 @@ The traffic drivers check response identity, destination, duplicate delivery
 and data. Results and logs are generated under `gvsoc/build/`.
 
 Coverage includes all-to-all and Philox sparse/grouped native traffic, the
-fat-tree routing modes, mesh dimensions, and SoC reads with different widths,
+fat-tree routing modes, mesh/crossbar dimensions, and SoC reads with different widths,
 burst lengths, read slots and context counts. Protocol checks exercise stalls,
 mixed reads/writes and invalid accesses. The kernel checks additionally cover
 reset flushing, spill depths, held response selection and endpoint slot reuse.
+Crossbar checks cover pipeline latency, simultaneous transfers to different
+outputs, contention fairness, late arrivals during a stalled grant, and port
+counts above 32 and outside powers of two. HBM4 checks include crossbar bursts
+and response backpressure.
 
 Accuracy depends on the measured topology, workload and endpoint. The
 transaction source interface abstracts independent AXI pin timing; a different

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Cycle models of the native and AXI-wrapped 3D-Fattree-Impl networks.
+"""Cycle models of native and AXI-wrapped fat-tree, mesh and crossbar networks.
 
 Import with importlib.import_module('pulp.3d_network.interconnect').
 Source ports use IO_v2 SingleReq. SoC memory ports use IO_v2 Beat so that
@@ -58,6 +58,15 @@ class MeshInterconnect(_Interconnect):
     def __init__(self, parent, name, *, num_x=32, num_y=32, io_spill=2,
                  data_width=64, addr_width=32):
         super().__init__(parent, name, soc=False, fabric=1, num_x=num_x,
+                         num_y=num_y, io_spill=io_spill, routing_mode=0,
+                         data_width=data_width, addr_width=addr_width)
+
+
+class XbarInterconnect(_Interconnect):
+    """Full packet crossbar with num_x * num_y paired input/output ports."""
+    def __init__(self, parent, name, *, num_x=32, num_y=32, io_spill=2,
+                 data_width=64, addr_width=32):
+        super().__init__(parent, name, soc=False, fabric=2, num_x=num_x,
                          num_y=num_y, io_spill=io_spill, routing_mode=0,
                          data_width=data_width, addr_width=addr_width)
 

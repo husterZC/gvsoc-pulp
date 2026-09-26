@@ -173,6 +173,16 @@ def main():
     protocol_cases += [dict(soc=1,fabric=1,nx=3,ny=2,sc=16,mc=16,burst=16,stress=1,endpoint=endpoint)
                        for endpoint in (0,2)]
     protocol_cases += [dict(soc=1,fabric=1,nx=3,ny=2,functional=1,endpoint=2)]
+    protocol_cases += [dict(soc=0,fabric=2,nx=nx,ny=ny,stress=1,groups=11,spill=spill)
+                       for nx,ny in ((1,1),(3,2),(9,7),(32,32)) for spill in (1,2,3)]
+    protocol_cases += [dict(soc=0,fabric=2,nx=3,ny=2,sparse=0,repeats=3)]
+    protocol_cases += [dict(soc=1,fabric=2,nx=3,ny=2,functional=1,stress=1,
+                           datawidth=width,backing=backing)
+                       for width in (8,64,512,1024) for backing in (0,1)]
+    protocol_cases += [dict(soc=1,fabric=2,nx=3,ny=2,sc=8,mc=8,burst=16,
+                           readslots=1,stress=1,backing=0,mode=mode) for mode in (0,1,2)]
+    protocol_cases += [dict(soc=1,fabric=2,nx=3,ny=2,burst=256,stress=1,backing=0)]
+    protocol_cases += [dict(soc=1,fabric=2,nx=3,ny=2,functional=1,endpoint=2)]
     for index, p in enumerate(protocol_cases):
         measured = run_gvsoc(work_dir/f'protocol_{index:02}', p, timeout=180)
         report['protocol_tests'].append(dict(parameters=p,gvsoc=measured,status='PASS'))

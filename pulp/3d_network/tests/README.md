@@ -31,6 +31,11 @@ must contain benchmark reference results with matching source hashes. Logs and
 generated target configurations go to `build/network3d/validation/`; change
 that location with `--work-dir`.
 
+The protocol checks also exercise `fabric=2` with 1, 6, 63 and 1024 terminals,
+multiple spill depths, mixed read/write traffic and 256-beat bursts. Crossbar
+coverage is functional and timing-contract validation; the RTL SoC wrapper
+does not expose a crossbar fabric for a full SoC cycle comparison.
+
 To generate additional native reference cases with Questa and include them:
 
 ```bash
@@ -69,5 +74,6 @@ g++ -O1 -g -std=c++17 -fsanitize=address,undefined \
 ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 build/network3d/kernel_checks
 ```
 
-These cover the shared C++ kernels. The GVSoC functional and backpressure tests
-cover the IO_v2 component wrappers.
+These cover the shared C++ kernels, including crossbar latency, parallel
+throughput, contention, arbitration locks and reset. The GVSoC functional and
+backpressure tests cover the IO_v2 component wrappers.

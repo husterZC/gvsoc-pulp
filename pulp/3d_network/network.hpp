@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Cycle model of 3D-Fattree-Impl's registered native fabrics.
+// Cycle models of registered fat-tree, mesh and crossbar packet fabrics.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -10,7 +10,7 @@
 namespace network3d {
 
 struct Config {
-    int fabric = 0; // 0: radix-16 dual fat tree; 1: non-wrapping XY mesh
+    int fabric = 0; // 0: radix-16 dual fat tree; 1: XY mesh; 2: full crossbar
     int num_x = 32, num_y = 32, num_levels = 3, routing_mode = 1, io_spill = 2;
     int data_width = 64, addr_width = 32;
 };
@@ -77,7 +77,7 @@ struct Arbiter {
 class Network {
 public:
     explicit Network(Config config) : cfg(config) {
-        if (cfg.fabric < 0 || cfg.fabric > 1 || cfg.routing_mode < 0 || cfg.routing_mode > 2 ||
+        if (cfg.fabric < 0 || cfg.fabric > 2 || cfg.routing_mode < 0 || cfg.routing_mode > 2 ||
             cfg.io_spill < 1 || cfg.io_spill > 32 || cfg.data_width < 1 || cfg.addr_width < 1 ||
             cfg.num_x < 1 || cfg.num_y < 1)
             throw std::invalid_argument("invalid network parameters");
@@ -93,13 +93,18 @@ public:
         terminals = int(n);
         for (int v = terminals-1; v; v >>= 1) ++dst_bits;
         if (cfg.addr_width < dst_bits) throw std::invalid_argument("address cannot hold terminal ID");
+        endpoint.resize(terminals);
+        offered.resize(terminals); pending.assign(terminals, false); taken.assign(terminals, false);
+        if (cfg.fabric == 2) {
+            build_xbar();
+            moves.reserve(pipes.size());
+            return;
+        }
         radix = cfg.fabric ? 5 : 16;
         int per_level = cfg.fabric ? 0 : 2 * ipow(8, cfg.num_levels-1);
         int count = cfg.fabric ? terminals : per_level * (cfg.num_levels-1) + per_level/2;
         routers.resize(count);
         pipes.resize(size_t(count)*radix*cfg.io_spill*2);
-        endpoint.resize(terminals);
-        offered.resize(terminals); pending.assign(terminals, false); taken.assign(terminals, false);
         for (int r=0; r<count; ++r) {
             auto &router = routers[r];
             router.level = cfg.fabric ? 0 : r / per_level + 1;
@@ -132,7 +137,7 @@ public:
         return {x,y};
     }
     int size() const { return terminals; }
-    int router_count() const { return int(routers.size()); }
+    int router_count() const { return cfg.fabric == 2 ? 1 : int(routers.size()); }
     uint64_t occupancy() const { return resident; }
     bool can_offer(int src) const {
         return !pending.at(src) && pipes[endpoint[src].first].ready();
@@ -155,6 +160,9 @@ public:
         for (auto &r:routers) {
             for (int p=0;p<radix;++p) { r.arbiters[p]={}; r.route_rr[p]=p&7; r.route_lock[p]=-1; }
         }
+        std::fill(xbar_rr.begin(),xbar_rr.end(),0);
+        std::fill(xbar_locked_input.begin(),xbar_locked_input.end(),false);
+        std::fill(xbar_locked_output.begin(),xbar_locked_output.end(),false);
         std::fill(pending.begin(),pending.end(),false);
         std::fill(taken.begin(),taken.end(),false); resident=0;
     }
@@ -162,6 +170,7 @@ public:
         moves.clear();
         for (const auto &e:edges)
             if (pipes[e.first].count && pipes[e.second].ready()) moves.push_back(e);
+        if (cfg.fabric == 2) arbitrate_xbar();
         for (int ri=0;ri<int(routers.size());++ri) {
             auto &r=routers[ri];
             unsigned requests[16]={}; int selections[16];
@@ -221,6 +230,11 @@ private:
     std::vector<Packet> offered,payloads;
     std::vector<bool> pending,taken;
     std::vector<int> dest_tile,dest_port,dest_hash;
+    // Each input head requests exactly one output. Linked request lists and
+    // one lock bit per input avoid an N-by-N request/lock matrix.
+    std::vector<int> xbar_head,xbar_next;
+    std::vector<unsigned> xbar_rr;
+    std::vector<bool> xbar_locked_input,xbar_locked_output;
     int pipe(int r,int p,int side,int s) const {
         return ((r*radix+p)*2+side)*cfg.io_spill+s;
     }
@@ -237,6 +251,57 @@ private:
             prior*=dup;
         }
         return result;
+    }
+    void build_xbar() {
+        radix=terminals;
+        pipes.resize(size_t(terminals)*2*cfg.io_spill);
+        xbar_head.resize(terminals); xbar_next.resize(terminals);
+        xbar_rr.assign(terminals,0);
+        xbar_locked_input.assign(terminals,false);
+        xbar_locked_output.assign(terminals,false);
+        for (int p=0;p<terminals;++p) {
+            endpoint[p]={pipe(0,p,0,0),pipe(0,p,1,cfg.io_spill-1)};
+            for (int side=0;side<2;++side)
+                for (int s=0;s+1<cfg.io_spill;++s)
+                    edges.emplace_back(pipe(0,p,side,s),pipe(0,p,side,s+1));
+        }
+    }
+    void arbitrate_xbar() {
+        std::fill(xbar_head.begin(),xbar_head.end(),-1);
+        for (int src=0;src<terminals;++src) {
+            const auto &q=pipes[pipe(0,src,0,cfg.io_spill-1)];
+            if (!q.count) continue;
+            int dst=q.front().dst;
+            xbar_next[src]=xbar_head[dst]; xbar_head[dst]=src;
+        }
+        for (int dst=0;dst<terminals;++dst) {
+            int winner=-1,first=terminals,next=terminals;
+            unsigned rr=xbar_rr[dst];
+            bool locked=xbar_locked_output[dst];
+            for (int src=xbar_head[dst];src>=0;src=xbar_next[src]) {
+                if (locked && !xbar_locked_input[src]) continue;
+                // Equivalent to rr_arb_tree's binary priority selection, also
+                // for non-power-of-two port counts padded with inactive leaves.
+                if (winner<0 || (unsigned(src)^rr)<(unsigned(winner)^rr)) winner=src;
+                first=std::min(first,src);
+                if (unsigned(src)>rr) next=std::min(next,src);
+            }
+            if (winner<0) continue;
+            int output=pipe(0,dst,1,0);
+            bool ready=pipes[output].ready();
+            if (ready) {
+                moves.emplace_back(pipe(0,winner,0,cfg.io_spill-1),output);
+                // FairArb advances past the previous priority, not the winner.
+                xbar_rr[dst]=next<terminals?next:first;
+            }
+            if (ready || !locked) {
+                // LockIn snapshots all current contenders on the first stall.
+                // A locked input cannot leave until this output grants a beat.
+                for (int src=xbar_head[dst];src>=0;src=xbar_next[src])
+                    xbar_locked_input[src]=!ready;
+                xbar_locked_output[dst]=!ready;
+            }
+        }
     }
     void build_mesh() {
         for (int x=0;x<cfg.num_x;++x) for (int y=0;y<cfg.num_y;++y) {

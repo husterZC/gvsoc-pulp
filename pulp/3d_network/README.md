@@ -1,6 +1,6 @@
 # 3D network models
 
-GVSoC models of the RTL fat-tree, mesh and SoC interconnects, with IO_v2
+GVSoC fat-tree, mesh and crossbar models, with IO_v2 interfaces, SoC network
 interfaces and separate RAM or DRAMSys memory endpoints.
 
 Use the normal GVSoC build and installed runner. This branch uses **`gvrun`**
@@ -60,7 +60,7 @@ native/RAM benchmark, use `make TARGETS=network3d build`.
 
 | Target | Purpose | Defaults |
 |---|---|---|
-| `network3d` | Native fat-tree/mesh traffic, or SoC traffic with RAM | Native fat tree, NCA hash, 32 × 32 terminals |
+| `network3d` | Native fat-tree/mesh/crossbar traffic, or SoC traffic with RAM | Native fat tree, NCA hash, 32 × 32 terminals |
 | `network3d_hbm4` | SoC traffic with one DRAMSys HBM4 channel per terminal | Fat tree, NCA hash, 1 GHz, AXI 64/512 bits, B16, X=8 |
 | `network3d_endpoint` | Isolated memory-channel bandwidth and backpressure | One HBM4 channel, 4096 reads, B16, window=8 |
 
@@ -83,6 +83,20 @@ After DRAMSys setup, the equivalent HBM4 check is:
 gvrun --target=network3d_hbm4 --work-dir=build/runs/hbm4 \
     --parameter=fabric=1 --parameter=nx=2 --parameter=ny=2 run
 ```
+
+For a crossbar connecting 64 terminals, each with one HBM4 channel:
+
+```bash
+gvrun --target=network3d_hbm4 --work-dir=build/runs/xbar_hbm4 \
+    --parameter=fabric=2 --parameter=nx=8 --parameter=ny=8 run
+```
+
+The crossbar directly connects every input to every output. `nx * ny` sets the
+number of paired ports; it does not create a two-dimensional router grid.
+`spill` sets the registered stages on each side of the switch (default 2).
+Different outputs can transfer concurrently; traffic to the same output is
+arbitrated per packet. The SoC interfaces and memory endpoint behavior apply
+to all three topologies.
 
 The full 1024-terminal B16/X=8 fat-tree benchmark and isolated channel test are:
 
@@ -116,9 +130,10 @@ instead of the installed platform tree. This is the normal parameter fallback.
 | Benchmark parameter | Meaning |
 |---|---|
 | `soc` | 0: native packets; 1: SoC read/write transactions |
-| `fabric` | 0: fat tree; 1: mesh |
-| `mode` | 0: LCA; 1: NCA hash; 2: adaptive NCA (fat tree) |
-| `nx`, `ny` | Mesh dimensions; the default fat tree has 32 × 32 terminals |
+| `fabric` | 0: fat tree; 1: mesh; 2: crossbar |
+| `mode` | Fat-tree routing: 0 LCA, 1 NCA hash, 2 adaptive NCA; unused by mesh/crossbar |
+| `nx`, `ny` | Mesh dimensions or crossbar terminal layout; the fat-tree benchmark has 32 × 32 terminals |
+| `spill` | Registered stages per input and output, 1–32 for mesh/crossbar; fat tree uses 2 |
 | `burst` | AXI beats per read, up to 256 |
 | `sc`, `mc` | Source and memory NI contexts; X means setting both |
 | `frequency` | Interconnect clock frequency in Hz |

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Native fat-tree/mesh and SoC traffic benchmark, built with make TARGETS=network3d."""
+"""Native fat-tree/mesh/crossbar and SoC traffic, built with make TARGETS=network3d."""
 import importlib
 import gvsoc.runner
 

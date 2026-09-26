@@ -21,6 +21,8 @@ class Chip(gvsoc.systree.Component):
         defaults.update(overrides or {})
         p = {k: TargetParameter(self, name=k, value=v, cast=int,
                                description=k).get_value() for k, v in defaults.items()}
+        if p['fabric'] not in (0, 1, 2):
+            raise ValueError('fabric must be 0 (fat tree), 1 (mesh), or 2 (crossbar)')
         if p['soc'] and p['endpoint'] == 3:
             dram_type = TargetParameter(self, name='dram_type', value='hbm4-emu-example.json',
                                        cast=str, description='DRAMSys simulation JSON').get_value()
@@ -37,8 +39,11 @@ class Chip(gvsoc.systree.Component):
                 axi_data_width=p['datawidth'], axi_addr_width=p['addrwidth'],
                 io_spill=p['spill'], interleave_bytes=p['interleave_bytes'],
                 memory_bytes=p['memory_bytes'])
-        elif p['fabric']:
+        elif p['fabric'] == 1:
             network = models.MeshInterconnect(self, 'network', num_x=p['nx'],
+                num_y=p['ny'], io_spill=p['spill'], data_width=p['datawidth'])
+        elif p['fabric'] == 2:
+            network = models.XbarInterconnect(self, 'network', num_x=p['nx'],
                 num_y=p['ny'], io_spill=p['spill'], data_width=p['datawidth'])
         else:
             network = models.FatTreeInterconnect(self, 'network',
