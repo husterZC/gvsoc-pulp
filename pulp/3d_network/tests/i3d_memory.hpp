@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "../soc.hpp"
+#include "../i3d.hpp"
 #include "../memory_endpoint.hpp"
 #include <memory>
 #include <unordered_map>
 
 // Standalone harness for the same external endpoint policy used by GVSoC.
-// Soc only sees request handshakes and externally offered R/B responses.
+// I3d only sees request handshakes and externally offered R/B responses.
 class TestMemory {
     struct Job : network3d::MemoryRequest { network3d::Transaction *tx; };
     struct Endpoint {
@@ -15,15 +15,15 @@ class TestMemory {
         bool r_valid=false,b_valid=false;
         explicit Endpoint(int slots) : timing(slots) {}
     };
-    network3d::Soc &soc;
+    network3d::I3d &i3d;
     std::vector<Endpoint> endpoints;
     std::unordered_map<network3d::Transaction*,std::unique_ptr<Job>> jobs;
 public:
     std::function<unsigned(network3d::Transaction&)> access;
-    TestMemory(network3d::Soc &soc,int slots) : soc(soc) {
-        for (int i=0;i<soc.size();++i) endpoints.emplace_back(slots);
-        soc.issue=[this](auto &tx,int sequence) {
-            auto &ep=endpoints[tx.destination]; auto now=this->soc.now();
+    TestMemory(network3d::I3d &i3d,int slots) : i3d(i3d) {
+        for (int i=0;i<i3d.size();++i) endpoints.emplace_back(slots);
+        i3d.issue=[this](auto &tx,int sequence) {
+            auto &ep=endpoints[tx.destination]; auto now=this->i3d.now();
             if (sequence<0) {
                 if (!ep.timing.can_read(now)) return false;
                 auto job=std::make_unique<Job>(); job->tx=&tx; job->beats=tx.beats;
@@ -44,8 +44,8 @@ public:
             }
             return true;
         };
-        soc.memory_response_accepted=[this](auto &tx,int sequence) {
-            auto &ep=endpoints[tx.destination]; auto now=this->soc.now();
+        i3d.memory_response_accepted=[this](auto &tx,int sequence) {
+            auto &ep=endpoints[tx.destination]; auto now=this->i3d.now();
             if (tx.write) { ep.timing.write_accepted(now); ep.writer=nullptr; ep.b_valid=false; }
             else { ep.timing.read_accepted(now); ep.r_valid=false; }
             if (tx.write || sequence+1==tx.beats) jobs.erase(&tx);
@@ -54,11 +54,11 @@ public:
     void step() {
         for (auto &ep:endpoints) {
             if (!ep.r_valid) {
-                auto r=ep.timing.read_response(soc.now());
-                if (r.request) { soc.memory_response(*static_cast<Job*>(r.request)->tx,r.sequence); ep.r_valid=true; }
+                auto r=ep.timing.read_response(i3d.now());
+                if (r.request) { i3d.memory_response(*static_cast<Job*>(r.request)->tx,r.sequence); ep.r_valid=true; }
             }
-            if (!ep.b_valid) if (auto r=ep.timing.write_response(soc.now())) {
-                soc.memory_response(*static_cast<Job*>(r)->tx,0); ep.b_valid=true;
+            if (!ep.b_valid) if (auto r=ep.timing.write_response(i3d.now())) {
+                i3d.memory_response(*static_cast<Job*>(r)->tx,0); ep.b_valid=true;
             }
         }
     }

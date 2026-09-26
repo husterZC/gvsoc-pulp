@@ -11,7 +11,7 @@ import importlib
 network3d = importlib.import_module('pulp.3d_network.interconnect')
 MemoryEndpoint = importlib.import_module('pulp.3d_network.memory_endpoint').MemoryEndpoint
 
-noc = network3d.SocInterconnect(
+noc = network3d.I3dInterconnect(
     self, 'noc', fabric=0, num_x=32, num_y=32, num_levels=3,
     routing_mode=1, source_contexts=4, memory_contexts=4,
     axi_data_width=64, max_burst_beats=256,
@@ -33,7 +33,7 @@ paired ports, using the same terminal numbering. See
 complete target with masters and memories at every terminal.
 
 `MemoryEndpoint` is a separate component. It owns storage and memory service;
-`SocInterconnect` owns the NoC and its source/sink network interfaces. To use
+`I3dInterconnect` owns the NoC and its source/sink network interfaces. To use
 external backing storage, bind `memory.o_OUTPUT(storage.i_INPUT())`; otherwise
 the endpoint uses its internal RAM. You can also connect the NoC directly to
 another IO_v2 beat endpoint, which then supplies its own timing and capacity.
@@ -44,7 +44,7 @@ when connecting components in different clock domains.
 
 | Python argument | RTL parameter / meaning | Default |
 |---|---|---|
-| `fabric` | SoC fabric: 0 fat tree, 1 mesh, 2 crossbar | 0 |
+| `fabric` | I3D fabric: 0 fat tree, 1 mesh, 2 crossbar | 0 |
 | `num_x`, `num_y` | `NumX`, `NumY` | 32, 32 |
 | `num_levels` | `NumLevels`, radix-16 fat tree | 3 |
 | `routing_mode` | Fat-tree `RoutingMode`: LCA, hash, adaptive; unused for mesh/crossbar | 1 |
@@ -60,7 +60,7 @@ Memory endpoint parameters:
 
 | Python argument | Meaning | Default |
 |---|---|---|
-| `data_width` | Memory bus width in bits; match `SocInterconnect.axi_data_width` | 64 |
+| `data_width` | Memory bus width in bits; match `I3dInterconnect.axi_data_width` | 64 |
 | `size` | Local RAM capacity in bytes | 4096 |
 | `read_slots` | Concurrent memory read bursts; `axi_sim_mem.ReadSlots` | 4 |
 | `benchmark_init`, `endpoint_id` | Initialize RAM with the RTL benchmark's byte pattern | `False`, 0 |
@@ -71,7 +71,7 @@ read slots. `memory_bytes` describes address decoding, not integrated storage.
 
 Positive mesh/crossbar dimensions and 1–32 spill stages are supported. The fat tree
 supports levels 3–6, with dimensions derived from the RTL expansion rules;
-the practical allocation limit is one million terminals. Large SoC context
+the practical allocation limit is one million terminals. Large I3D context
 counts and terminal counts consume correspondingly more host memory. These
 limits are checked at construction. AXI data widths are powers of two from
 8 to 1024 bits; burst capacity is at most 256 beats and must fit the LEN width.
@@ -85,9 +85,9 @@ identities or impose same-ID ordering.
 ### Crossbar timing
 
 `XbarInterconnect` models a fully connected packet switch. To use it inside the
-SoC interconnect, set `SocInterconnect(..., fabric=2)`. Each input can send at
+I3D interconnect, set `I3dInterconnect(..., fabric=2)`. Each input can send at
 most one packet per cycle and each output can receive at most one packet per
-cycle; different outputs arbitrate independently. The SoC's reservation, grant,
+cycle; different outputs arbitrate independently. The I3D's reservation, grant,
 request and response packets use this same fabric.
 
 The timing contract follows `common_cells.stream_xbar` with `OutSpillReg=0`,
@@ -113,7 +113,7 @@ completion. Native models accept one packet of at most
 ejection endpoint unchanged. Completion acknowledges delivery to that
 endpoint; the native RTL fabric has no separate response network.
 
-The SoC model accepts a complete read or write transaction in one IO_v2
+The I3D model accepts a complete read or write transaction in one IO_v2
 object. It models `ceil(size / (axi_data_width/8))` full-width AXI beats, with
 a possibly partial final beat. Requests to one source share the finite
 source contexts. For `a = address - memory_base` and `G = interleave_bytes`:
@@ -123,7 +123,7 @@ destination = (a / G) % number_of_terminals
 local_address = (a / (G * number_of_terminals)) * G + a % G
 ```
 
-The SoC memory ports declare **`IoV2Beat(axi_data_width // 8)`** and carry
+The I3D memory ports declare **`IoV2Beat(axi_data_width // 8)`** and carry
 translated local addresses. The sink NI issues one read descriptor or a
 sequence of write beats after full W reassembly. It forms NoC response packets
 only as the endpoint offers R beats or a B acknowledgement. It contains no
@@ -150,7 +150,7 @@ Reset flushes the fabric and contexts; reset the connected masters and
 memories together. Late responses to canceled children are discarded.
 
 On source ports, unsupported atomics, zero-size or data-less requests, and
-beat-stream fragments are rejected. SoC requests outside the memory map, crossing an
+beat-stream fragments are rejected. I3D requests outside the memory map, crossing an
 interleave stripe, or exceeding burst capacity return `IO_RESP_INVALID`.
 Connect a beat-stream master through the engine's explicit protocol bridge
 when needed; direct AXI pin behavior such as W-before-AW, independent AW/W
@@ -162,14 +162,14 @@ benchmarks' full-width INCR requests, not every possible AXI pin trace.
 ## Validation and performance
 
 The optional [regression tools](../tests/README.md) run the installed GVSoC
-benchmark targets. `validate.py` compares the native and SoC/RAM workloads
+benchmark targets. `validate.py` compares the native and I3D/RAM workloads
 against RTL references, checks source hashes and fails on more than 5% absolute
 runtime-cycle deviation, wrong traffic counts or mismatched workload checksums.
 The traffic drivers check response identity, destination, duplicate delivery
 and data. Results and logs are generated under `gvsoc/build/`.
 
 Coverage includes all-to-all and Philox sparse/grouped native traffic, the
-fat-tree routing modes, mesh/crossbar dimensions, and SoC reads with different widths,
+fat-tree routing modes, mesh/crossbar dimensions, and I3D reads with different widths,
 burst lengths, read slots and context counts. Protocol checks exercise stalls,
 mixed reads/writes and invalid accesses. The kernel checks additionally cover
 reset flushing, spill depths, held response selection and endpoint slot reuse.

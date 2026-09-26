@@ -65,7 +65,7 @@ def main():
     build = Path(os.environ.get('NETWORK3D_BUILD_DIR', ROOT/'build/network3d_hbm4')).resolve()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--contexts', nargs='+', type=int, default=[8,16,32,64,128,256])
-    parser.add_argument('--output', type=Path, default=build/'soc_context_b16_hbm4_results.json',
+    parser.add_argument('--output', type=Path, default=build/'i3d_context_b16_hbm4_results.json',
                         help='Results JSON (default: %(default)s)')
     parser.add_argument('--reuse', action='store_true', help='Verify and reuse existing complete logs')
     args = parser.parse_args()

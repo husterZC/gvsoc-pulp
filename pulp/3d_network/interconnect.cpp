@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <vp/vp.hpp>
 #include <vp/itf/io_v2.hpp>
-#include "soc.hpp"
+#include "i3d.hpp"
 #include <memory>
 #include <queue>
 #include <unordered_set>
@@ -31,9 +31,9 @@ class Interconnect3d : public vp::Component {
         int64_t cycle; Transfer *transfer;
         bool operator<(const Ready &b) const { return cycle>b.cycle; }
     };
-    network3d::SocConfig cfg;
+    network3d::I3dConfig cfg;
     std::unique_ptr<network3d::Network> net;
-    std::unique_ptr<network3d::Soc> soc;
+    std::unique_ptr<network3d::I3d> i3d;
     std::vector<std::unique_ptr<vp::IoSlave>> inputs;
     std::vector<std::unique_ptr<vp::IoMaster>> outputs;
     std::vector<bool> denied;
@@ -50,7 +50,7 @@ class Interconnect3d : public vp::Component {
     bool in_tick=false,reset_active=false;
 
     void wake() { if (!reset_active && !event.is_enqueued() && !in_tick) event.enqueue(0); }
-    bool can_offer(int s) { return soc ? soc->can_offer(s) : net->can_offer(s); }
+    bool can_offer(int s) { return i3d ? i3d->can_offer(s) : net->can_offer(s); }
     void retire(Transfer *t) { live.erase(t); if (!t->canceled) --active_transfers; garbage.push_back(t); }
     void collect() { for (auto t:garbage) delete t; garbage.clear(); }
     void memory_complete(Transfer *t) {
@@ -142,7 +142,7 @@ class Interconnect3d : public vp::Component {
         for (auto &channels:memory_responses) for (auto &r:channels)
             if (r.req && !r.offered && r.due<=clock.get_cycles()) {
                 auto t=r.transfer; r.offered=true;
-                soc->memory_response(t->tx,t->tx.write?0:int(t->read_offset/(cfg.axi_data_width/8)));
+                i3d->memory_response(t->tx,t->tx.write?0:int(t->read_offset/(cfg.axi_data_width/8)));
             }
     }
     void consume_memory_response(network3d::Transaction &tx) {
@@ -192,7 +192,7 @@ class Interconnect3d : public vp::Component {
         }
         t->responded=true;
         // The kernel may still reference the transfer until this step ends.
-        if (!soc) retire(t);
+        if (!i3d) retire(t);
         return true;
     }
     static vp::IoReqStatus request(vp::Block *block,vp::IoReq *req,int source) {
@@ -201,11 +201,11 @@ class Interconnect3d : public vp::Component {
             req->set_resp_status(vp::IO_RESP_INVALID); return vp::IO_REQ_DONE;
         }
         if (!req->get_size() || !req->get_data() || !req->is_first || !req->is_last ||
-            (!self.soc && req->get_size()>uint64_t((self.cfg.network.data_width+7)/8))) {
+            (!self.i3d && req->get_size()>uint64_t((self.cfg.network.data_width+7)/8))) {
             req->set_resp_status(vp::IO_RESP_INVALID); return vp::IO_REQ_DONE;
         }
         int destination=int(req->get_addr() & ((uint64_t(1)<<self.dst_bits)-1));
-        if (!self.soc && destination>=self.n) {
+        if (!self.i3d && destination>=self.n) {
             req->set_resp_status(vp::IO_RESP_INVALID); return vp::IO_REQ_DONE;
         }
         if (self.reset_active || !self.can_offer(source)) {
@@ -215,14 +215,14 @@ class Interconnect3d : public vp::Component {
         t->original=req; t->tx.opaque=t; t->tx.id=reinterpret_cast<uintptr_t>(t);
         t->tx.source=source; t->tx.destination=destination;
         t->tx.address=req->get_addr(); t->tx.size=req->get_size(); t->tx.write=req->get_is_write();
-        if (self.soc) self.soc->offer(source,t->tx);
+        if (self.i3d) self.i3d->offer(source,t->tx);
         else {
             network3d::Packet p; p.id=t->tx.id; p.src=source; p.dst=destination;
             self.net->offer(source,p);
         }
         // The parent belongs to the caller. Preserve its address and identity,
         // including its initiator; only our child carries private routing state.
-        t->child.set_addr(self.soc?t->tx.local_address:req->get_addr());
+        t->child.set_addr(self.i3d?t->tx.local_address:req->get_addr());
         if (!t->tx.error) {
             t->data.resize(req->get_size());
             if (req->get_is_write()) std::memcpy(t->data.data(),req->get_data(),t->data.size());
@@ -248,7 +248,7 @@ class Interconnect3d : public vp::Component {
                 self.downstream_denied[destination].push_back(t);
             else {
                 t->submitted=false;
-                if (self.soc) self.submit_beat(t,t->submitted_sequence); else self.submit(t);
+                if (self.i3d) self.submit_beat(t,t->submitted_sequence); else self.submit(t);
             }
         }
         self.wake();
@@ -256,7 +256,7 @@ class Interconnect3d : public vp::Component {
     static vp::IoRespAck response(vp::Block *block,vp::IoReq *req,int destination) {
         auto &self=*static_cast<Interconnect3d*>(block);
         auto t=static_cast<Transfer*>(req->initiator);
-        if (!self.soc) { self.memory_complete(t); return vp::IO_RESP_ACCEPTED; }
+        if (!self.i3d) { self.memory_complete(t); return vp::IO_RESP_ACCEPTED; }
         if (t->canceled) {
             bool last=req->is_last; req->free();
             if (last) self.retire(t);
@@ -285,7 +285,7 @@ class Interconnect3d : public vp::Component {
             self.denied[s]=false;
             self.inputs[s]->retry(vp::IO_RETRY_ANY);
         }
-        if (self.soc) { self.offer_memory_responses(); self.soc->step(); }
+        if (self.i3d) { self.offer_memory_responses(); self.i3d->step(); }
         else {
             for (int d=0;d<self.n;++d) if (auto p=self.net->peek(d)) {
                 auto t=reinterpret_cast<Transfer*>(p->id);
@@ -312,13 +312,13 @@ public:
         READ(memory_base); READ(interleave_bytes); READ(memory_bytes);
 #undef READ
 #undef NET
-        if (js->get_child_bool("soc")) {
-            soc=std::make_unique<network3d::Soc>(cfg); n=soc->size();
-            soc->issue=[this](network3d::Transaction &tx,int sequence) {
+        if (js->get_child_bool("i3d")) {
+            i3d=std::make_unique<network3d::I3d>(cfg); n=i3d->size();
+            i3d->issue=[this](network3d::Transaction &tx,int sequence) {
                 return submit_beat(static_cast<Transfer*>(tx.opaque),sequence);
             };
-            soc->memory_response_accepted=[this](network3d::Transaction &tx,int) { consume_memory_response(tx); };
-            soc->respond=[this](network3d::Transaction &tx) {
+            i3d->memory_response_accepted=[this](network3d::Transaction &tx,int) { consume_memory_response(tx); };
+            i3d->respond=[this](network3d::Transaction &tx) {
                 auto t=static_cast<Transfer*>(tx.opaque);
                 if (!respond(t)) return false;
                 retire(t); return true;
@@ -338,7 +338,7 @@ public:
         reset_active=active;
         if (active) {
             event.cancel(); collect();
-            if (soc) soc->reset(); else net->reset();
+            if (i3d) i3d->reset(); else net->reset();
             ready={};
             active_transfers=0; std::fill(denied.begin(),denied.end(),false);
             for (auto t:live) {

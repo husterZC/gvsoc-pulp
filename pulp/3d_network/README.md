@@ -1,7 +1,8 @@
 # 3D network models
 
-GVSoC fat-tree, mesh and crossbar models, with IO_v2 interfaces, SoC network
-interfaces and separate RAM or DRAMSys memory endpoints.
+GVSoC fat-tree, mesh and crossbar models, with IO_v2 interfaces, an I3D AXI
+transaction wrapper (`I3dInterconnect`) and separate RAM or DRAMSys memory
+endpoints.
 
 Use the normal GVSoC build and installed runner. This branch uses **`gvrun`**
 for IO_v2 targets. All commands below run from the **`gvsoc/` repository root**.
@@ -60,8 +61,8 @@ native/RAM benchmark, use `make TARGETS=network3d build`.
 
 | Target | Purpose | Defaults |
 |---|---|---|
-| `network3d` | Native fat-tree/mesh/crossbar traffic, or SoC traffic with RAM | Native fat tree, NCA hash, 32 × 32 terminals |
-| `network3d_hbm4` | SoC traffic with one DRAMSys HBM4 channel per terminal | Fat tree, NCA hash, 1 GHz, AXI 64/512 bits, B16, X=8 |
+| `network3d` | Native fat-tree/mesh/crossbar traffic, or I3D traffic with RAM | Native fat tree, NCA hash, 32 × 32 terminals |
+| `network3d_hbm4` | I3D traffic with one DRAMSys HBM4 channel per terminal | Fat tree, NCA hash, 1 GHz, AXI 64/512 bits, B16, X=8 |
 | `network3d_endpoint` | Isolated memory-channel bandwidth and backpressure | One HBM4 channel, 4096 reads, B16, window=8 |
 
 Target registration is in `pulp/targets/network3d*.py`. The reusable models
@@ -69,11 +70,11 @@ remain independent of these benchmark targets.
 
 ## 4. Run a simulation
 
-First run a small SoC/RAM example:
+First run a small I3D/RAM example:
 
 ```bash
 gvrun --target=network3d --work-dir=build/runs/ram \
-    --parameter=soc=1 --parameter=fabric=1 \
+    --parameter=i3d=1 --parameter=fabric=1 \
     --parameter=nx=2 --parameter=ny=2 --parameter=backing=0 run
 ```
 
@@ -95,7 +96,7 @@ The crossbar directly connects every input to every output. `nx * ny` sets the
 number of paired ports; it does not create a two-dimensional router grid.
 `spill` sets the registered stages on each side of the switch (default 2).
 Different outputs can transfer concurrently; traffic to the same output is
-arbitrated per packet. The SoC interfaces and memory endpoint behavior apply
+arbitrated per packet. The I3D interfaces and memory endpoint behavior apply
 to all three topologies.
 
 The full 1024-terminal B16/X=8 fat-tree benchmark and isolated channel test are:
@@ -129,7 +130,7 @@ instead of the installed platform tree. This is the normal parameter fallback.
 
 | Benchmark parameter | Meaning |
 |---|---|
-| `soc` | 0: native packets; 1: SoC read/write transactions |
+| `i3d` | 0: native packets; 1: I3D read/write transactions |
 | `fabric` | 0: fat tree; 1: mesh; 2: crossbar |
 | `mode` | Fat-tree routing: 0 LCA, 1 NCA hash, 2 adaptive NCA; unused by mesh/crossbar |
 | `nx`, `ny` | Mesh dimensions or crossbar terminal layout; the fat-tree benchmark has 32 × 32 terminals |
@@ -137,7 +138,7 @@ instead of the installed platform tree. This is the normal parameter fallback.
 | `burst` | AXI beats per read, up to 256 |
 | `sc`, `mc` | Source and memory NI contexts; X means setting both |
 | `frequency` | Interconnect clock frequency in Hz |
-| `addrwidth`, `datawidth` | AXI address/data widths in bits in SoC mode |
+| `addrwidth`, `datawidth` | AXI address/data widths in bits in I3D mode |
 | `interleave_bytes`, `memory_bytes` | Stripe size and mapped bytes per endpoint |
 | `readslots` | RAM endpoint read capacity; unused by DRAMSys |
 | `dram_type` | DRAMSys simulation JSON filename |
@@ -163,7 +164,7 @@ import importlib
 network3d = importlib.import_module('pulp.3d_network.interconnect')
 MemoryEndpoint = importlib.import_module('pulp.3d_network.memory_endpoint').MemoryEndpoint
 
-noc = network3d.SocInterconnect(
+noc = network3d.I3dInterconnect(
     self, 'noc', fabric=0, routing_mode=1,
     source_contexts=8, memory_contexts=8,
     axi_addr_width=64, axi_data_width=512,
@@ -192,7 +193,7 @@ address mapping, interface contracts and validation limits.
 
 | Location | Contents |
 |---|---|
-| `interconnect.*`, `network.hpp`, `soc.hpp` | Reusable interconnect models |
+| `interconnect.*`, `network.hpp`, `i3d.hpp` | Reusable interconnect models |
 | `memory_endpoint.*`, `dramsys_endpoint.*` | Reusable memory endpoints |
 | `benchmarks/` | Benchmark system composition and traffic generators |
 | `../../targets/network3d*.py` | Conventional GVSoC target registration |

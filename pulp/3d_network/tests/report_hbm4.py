@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
 BUILD = Path(os.environ.get('NETWORK3D_BUILD_DIR', ROOT/'build/network3d_hbm4')).resolve()
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--input', type=Path, default=BUILD/'soc_context_b16_hbm4_results.json',
+parser.add_argument('--input', type=Path, default=BUILD/'i3d_context_b16_hbm4_results.json',
                     help='Completed sweep results (default: %(default)s)')
 parser.add_argument('--output-dir', type=Path, default=BUILD/'report',
                     help='Generated report and artifacts (default: %(default)s)')
@@ -54,13 +54,13 @@ for run in runs:
                             original_sha256=hashlib.sha256(config_bytes).hexdigest(),
                             gzip_sha256=hashlib.sha256(config_path.read_bytes()).hexdigest())))
 (logs/'manifest.json').write_text(json.dumps(archive,indent=2)+'\n')
-(OUTPUT/'soc_context_b16_hbm4_results.json').write_text(json.dumps(data,indent=2)+'\n')
+(OUTPUT/'i3d_context_b16_hbm4_results.json').write_text(json.dumps(data,indent=2)+'\n')
 best = min(runs, key=lambda r:r['runtime_cycles'])
 smallest = min(r['contexts'] for r in runs if r['runtime_cycles'] <= best['runtime_cycles']*1.05)
 fields = ['contexts','runtime_cycles','simulation_us','injection_cycles','drain_cycles',
           'aggregate_GBps','per_channel_GBps','channel_peak_utilization','peak_outstanding',
           'max_reads_at_one_endpoint','wall_seconds','process_wall_seconds','maximum_rss_kib']
-with (OUTPUT/'soc_context_b16_hbm4_results.csv').open('w',newline='') as stream:
+with (OUTPUT/'i3d_context_b16_hbm4_results.csv').open('w',newline='') as stream:
     writer = csv.DictWriter(stream,fieldnames=fields,extrasaction='ignore',lineterminator='\n')
     writer.writeheader()
     writer.writerows(runs)
@@ -74,7 +74,7 @@ detail = '\n'.join(f"| {r['contexts']} | {r['injection_cycles']:,.1f} | {r['drai
     f"{r['endpoint_totals']['request_denials']:,} |" for r in runs)
 parameters = data['parameters']
 guide = Path(os.path.relpath(HERE.parent/'README.md', OUTPUT)).as_posix()
-report = f'''# SoC B16 context sweep with DRAMSys HBM4 channels
+report = f'''# I3D B16 context sweep with DRAMSys HBM4 channels
 
 All six configurations completed successfully.
 **X={best['contexts']} has the lowest measured runtime: {best['runtime_cycles']:,.1f} cycles
@@ -82,8 +82,8 @@ All six configurations completed successfully.
 1,024 channels.** X={smallest} is the smallest tested context count within 5% of
 the best result. This conclusion applies to this all-to-all, repeated-address workload.
 
-[Exact CSV](soc_context_b16_hbm4_results.csv) ·
-[Results and source/configuration hashes](soc_context_b16_hbm4_results.json) ·
+[Exact CSV](i3d_context_b16_hbm4_results.csv) ·
+[Results and source/configuration hashes](i3d_context_b16_hbm4_results.json) ·
 [Compressed logs and target configurations](hbm4_logs/manifest.json)
 
 This report describes the inputs recorded in the results JSON. Endpoint source,
@@ -142,5 +142,5 @@ these six context configurations through the installed GVSoC target.
 Generated data belongs under `gvsoc/build/`. This report does not establish
 RTL-plus-DRAMSys cycle calibration.
 '''
-(OUTPUT/'soc_context_b16_hbm4.md').write_text(report)
-print(OUTPUT/'soc_context_b16_hbm4.md')
+(OUTPUT/'i3d_context_b16_hbm4.md').write_text(report)
+print(OUTPUT/'i3d_context_b16_hbm4.md')

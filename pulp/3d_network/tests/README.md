@@ -16,7 +16,7 @@ installed `gvrun` command and the `network3d*` targets.
 
 The benchmark compositions and drivers are in `../benchmarks/`. They are
 independent of these regression scripts. `dramsys_config.py` reads commented
-DRAMSys JSON for the HBM4 checks and sweep; `soc_memory.hpp` supplies the test
+DRAMSys JSON for the HBM4 checks and sweep; `i3d_memory.hpp` supplies the test
 memory used by the kernel checks.
 
 ## RTL comparison and protocol checks
@@ -26,15 +26,19 @@ python pulp/pulp/3d_network/tests/validate.py \
     --rtl ../3D-Fattree-Impl --output build/network3d/validation.json
 ```
 
-Use `--quick` to skip the full 1024-terminal SoC B16 sweeps. The RTL repository
+Use `--quick` to skip the full 1024-terminal I3D B16 sweeps. The RTL repository
 must contain benchmark reference results with matching source hashes. Logs and
 generated target configurations go to `build/network3d/validation/`; change
 that location with `--work-dir`.
 
+RTL reference filenames and imports keep their names from the separate RTL
+repository. The GVSoC model, target parameters and generated HBM4 reports use
+the `i3d` naming.
+
 The protocol checks also exercise `fabric=2` with 1, 6, 63 and 1024 terminals,
 multiple spill depths, mixed read/write traffic and 256-beat bursts. Crossbar
 coverage is functional and timing-contract validation; the RTL SoC wrapper
-does not expose a crossbar fabric for a full SoC cycle comparison.
+does not expose a crossbar fabric for a full I3D cycle comparison.
 
 To generate additional native reference cases with Questa and include them:
 
@@ -55,7 +59,7 @@ python pulp/pulp/3d_network/tests/report_hbm4.py
 ```
 
 The checks and sweep write results under `build/network3d_hbm4/`. The formatter
-reads `soc_context_b16_hbm4_results.json` there and writes Markdown, CSV, a copy
+reads `i3d_context_b16_hbm4_results.json` there and writes Markdown, CSV, a copy
 of the results JSON and compressed logs to its `report/` subdirectory. Use
 `--input` and `--output-dir` to select other report paths. All three tools honor
 `NETWORK3D_BUILD_DIR` for their default paths.

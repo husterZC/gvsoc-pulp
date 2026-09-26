@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "soc_memory.hpp"
+#include "i3d_memory.hpp"
 #include <iostream>
 #include <random>
 #include <set>
@@ -119,25 +119,25 @@ static void xbar_locks() {
     require(!net.occupancy(),"crossbar reset kept arbitration state");
 }
 
-static void mixed_soc(int fabric) {
-    network3d::SocConfig config; config.network.fabric=fabric;
+static void mixed_i3d(int fabric) {
+    network3d::I3dConfig config; config.network.fabric=fabric;
     config.network.num_x=3; config.network.num_y=2;
     config.source_contexts=3; config.memory_contexts=2;
     config.memory_base=uint64_t(1)<<32; config.axi_addr_width=64;
     config.memory_bytes=8192;
-    network3d::Soc soc(config);
-    TestMemory memory(soc,1);
+    network3d::I3d i3d(config);
+    TestMemory memory(i3d,1);
     std::mt19937 rng(19);
     std::vector<network3d::Transaction> requests(500);
     std::set<uint64_t> issued,done;
     memory.access=[&](auto &t) {
         require(issued.insert(t.id).second,"duplicate memory issue");
         uint64_t relative=t.address-config.memory_base;
-        require(t.local_address==(relative/(4096*soc.size()))*4096+relative%4096,
+        require(t.local_address==(relative/(4096*i3d.size()))*4096+relative%4096,
                 "wrong interleaved local address");
         return unsigned(rng()%7);
     };
-    soc.respond=[&](auto &t) {
+    i3d.respond=[&](auto &t) {
         if (rng()%3==0) return false;
         require(!t.error && issued.count(t.id) && done.insert(t.id).second,
                 "mixed read/write response error"); return true;
@@ -146,22 +146,22 @@ static void mixed_soc(int fabric) {
     for (int cycle=0;done.size()<requests.size();++cycle) {
         require(cycle<100000,"mixed read/write deadlock");
         if (sent<int(requests.size())) {
-            int source=rng()%soc.size();
-            if (soc.can_offer(source)) {
+            int source=rng()%i3d.size();
+            if (i3d.can_offer(source)) {
                 auto &t=requests[sent]; t.id=sent; t.write=rng()%2; t.size=(1+rng()%16)*8;
-                t.address=config.memory_base+4096*(rng()%(soc.size()*2))+64;
-                require(soc.offer(source,t),"unexpected source denial"); ++sent;
+                t.address=config.memory_base+4096*(rng()%(i3d.size()*2))+64;
+                require(i3d.offer(source,t),"unexpected source denial"); ++sent;
             }
         }
-        memory.step(); soc.step();
+        memory.step(); i3d.step();
     }
-    require(!soc.outstanding(),"mixed trailing contexts");
-    soc.reset(); memory.reset();
+    require(!i3d.outstanding(),"mixed trailing contexts");
+    i3d.reset(); memory.reset();
     network3d::Transaction bad; bad.address=0; bad.size=0;
     memory.access=[](auto &) { throw std::runtime_error("invalid request reached memory"); return 0u; };
-    soc.respond=[](auto &t) { require(t.error,"missing decode error"); return true; };
-    require(soc.offer(0,bad),"invalid admission");
-    soc.step(); soc.step(); require(!soc.outstanding(),"zero-size transaction hung");
+    i3d.respond=[](auto &t) { require(t.error,"missing decode error"); return true; };
+    require(i3d.offer(0,bad),"invalid admission");
+    i3d.step(); i3d.step(); require(!i3d.outstanding(),"zero-size transaction hung");
 }
 
 static void endpoint(int fabric) {
@@ -196,17 +196,17 @@ static void endpoint(int fabric) {
 
     // The network must wait indefinitely for an external memory response; it
     // cannot synthesize one using an internal latency or read-slot scheduler.
-    SocConfig cfg; cfg.network.fabric=fabric; cfg.network.num_x=cfg.network.num_y=1;
-    Soc soc(cfg); Transaction tx; tx.size=8;
+    I3dConfig cfg; cfg.network.fabric=fabric; cfg.network.num_x=cfg.network.num_y=1;
+    I3d i3d(cfg); Transaction tx; tx.size=8;
     bool issued=false,done=false;
-    soc.issue=[&](auto &,int sequence) { require(sequence==-1,"unexpected W"); issued=true; return true; };
-    soc.respond=[&](auto &) { done=true; return true; };
-    require(soc.offer(0,tx),"external endpoint request denied");
-    for (int i=0;i<100;++i) soc.step();
-    require(issued && !done && soc.outstanding()==1,"SoC fabricated memory response");
-    soc.memory_response(tx,0);
-    for (int i=0;i<100 && !done;++i) soc.step();
-    require(done && !soc.outstanding(),"external response did not release transaction");
+    i3d.issue=[&](auto &,int sequence) { require(sequence==-1,"unexpected W"); issued=true; return true; };
+    i3d.respond=[&](auto &) { done=true; return true; };
+    require(i3d.offer(0,tx),"external endpoint request denied");
+    for (int i=0;i<100;++i) i3d.step();
+    require(issued && !done && i3d.outstanding()==1,"I3D fabricated memory response");
+    i3d.memory_response(tx,0);
+    for (int i=0;i<100 && !done;++i) i3d.step();
+    require(done && !i3d.outstanding(),"external response did not release transaction");
 }
 
 int main() try {
@@ -221,6 +221,6 @@ int main() try {
     network3d::Config c; c.num_levels=4;
     auto shape=network3d::Network::fattree_shape(4); c.num_x=shape.first; c.num_y=shape.second;
     native(c); xbar_contention(); xbar_locks();
-    for (int fabric:{1,2}) { mixed_soc(fabric); endpoint(fabric); }
+    for (int fabric:{1,2}) { mixed_i3d(fabric); endpoint(fabric); }
     std::cout<<"KERNEL_CHECKS_PASS: stalls, reset, levels, spills, crossbar latency/throughput/arbitration, mixed R/W, external endpoint\n";
 } catch (const std::exception &e) { std::cerr<<e.what()<<"\n"; return 1; }

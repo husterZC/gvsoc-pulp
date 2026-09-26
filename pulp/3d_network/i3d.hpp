@@ -7,7 +7,7 @@
 namespace network3d {
 enum Kind { AW, W, B, AR, R, ReserveRead, ReserveWrite, Grant };
 
-struct SocConfig {
+struct I3dConfig {
     Config network;
     int source_contexts=4, memory_contexts=4, max_burst_beats=256;
     int axi_addr_width=32, axi_data_width=64, axi_id_width=10, axi_len_width=8;
@@ -21,7 +21,7 @@ struct Transaction {
     void *opaque=nullptr;
 };
 
-class Soc {
+class I3d {
 public:
     // The memory port issues one AR (sequence -1), or one W beat at a time.
     // Endpoint responses enter through memory_response; only the endpoint
@@ -30,7 +30,7 @@ public:
     std::function<bool(Transaction&,int)> issue;
     std::function<void(Transaction&,int)> memory_response_accepted;
     std::function<bool(Transaction&)> respond;
-    explicit Soc(SocConfig config) : cfg(config),network(cfg.network),n(network.size()) {
+    explicit I3d(I3dConfig config) : cfg(config),network(cfg.network),n(network.size()) {
         if (cfg.source_contexts<1 || cfg.memory_contexts<1 ||
             cfg.max_burst_beats<1 || cfg.max_burst_beats>256 || cfg.axi_len_width<1 ||
             cfg.axi_len_width>8 || cfg.max_burst_beats>(1<<cfg.axi_len_width) ||
@@ -40,7 +40,7 @@ public:
             cfg.interleave_bytes<unsigned(cfg.axi_data_width/8) ||
             (cfg.interleave_bytes&(cfg.interleave_bytes-1)) || !cfg.memory_bytes ||
             cfg.memory_bytes%cfg.interleave_bytes || cfg.memory_base%cfg.interleave_bytes)
-            throw std::invalid_argument("invalid SoC context/width/memory parameters");
+            throw std::invalid_argument("invalid I3D context/width/memory parameters");
         __uint128_t end=__uint128_t(cfg.memory_base)+__uint128_t(n)*cfg.memory_bytes;
         if (end>(__uint128_t(1)<<cfg.axi_addr_width)) throw std::invalid_argument("memory map overflows address width");
         terminals.resize(n); pending.resize(n,nullptr); pending_slot.resize(n);
@@ -281,7 +281,7 @@ private:
         unsigned res_rr=0;
         std::map<int,Reservation> reservations,res_locked;
     };
-    SocConfig cfg; Network network; int n;
+    I3dConfig cfg; Network network; int n;
     uint64_t cycle=0,active=0;
     std::vector<Terminal> terminals;
     std::vector<Transaction*> pending;

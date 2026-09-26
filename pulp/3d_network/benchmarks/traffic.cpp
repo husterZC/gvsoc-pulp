@@ -38,7 +38,7 @@ class Driver : public vp::Component {
     std::vector<int64_t> request_retry,response_retry;
     std::vector<bool> target_denied,response_denied;
     vp::ClockEvent event;
-    bool soc,sparse,stress,functional,backing;
+    bool i3d,sparse,stress,functional,backing;
     int n,count,repeats,groups,burst,offset,bytes,endpoint;
     uint64_t interleave_bytes,memory_bytes;
     int64_t progress_cycles;
@@ -51,7 +51,7 @@ class Driver : public vp::Component {
     }
     int destination(int s,int k) const {
         if (functional) return s;
-        if (soc) return (s+k)%n;
+        if (i3d) return (s+k)%n;
         return sparse ? philox(seed,s,k/repeats)%n : (s+k/repeats)%n;
     }
     void fail(const char *reason) { fprintf(stderr,"NETWORK3D_FAIL %s\n",reason); time.get_engine()->quit(1); }
@@ -62,12 +62,12 @@ class Driver : public vp::Component {
         if (!r) {
             auto item=std::make_unique<Request>(); r=item.get();
             r->id=uint64_t(s)*count+sent[s]; r->source=s; r->destination=destination(s,sent[s]);
-            r->bytes.resize(bytes*(soc?burst:1));
-            r->req.set_addr(soc ? address(r->destination,offset) : r->destination);
+            r->bytes.resize(bytes*(i3d?burst:1));
+            r->req.set_addr(i3d ? address(r->destination,offset) : r->destination);
             r->req.set_size(r->bytes.size()); r->req.set_data(r->bytes.data());
             r->req.set_is_write(false); r->req.initiator=r; r->req.parent=nullptr;
             r->req.burst_id=r->id;
-            r->local=soc?offset:r->destination;
+            r->local=i3d?offset:r->destination;
             if (functional) {
                 int k=sent[s];
                 uint64_t size=bytes*3,local=64;
@@ -93,7 +93,7 @@ class Driver : public vp::Component {
                 }
             }
             r->address=r->req.get_addr();
-            if (soc && endpoint==2) r->invalid=true;
+            if (i3d && endpoint==2) r->invalid=true;
             live.emplace(&r->req,std::move(item));
         }
         auto status=out[s]->req(&r->req);
@@ -121,7 +121,7 @@ class Driver : public vp::Component {
             return vp::IO_RESP_DENIED;
         }
         if (r.source!=s || req->initiator!=&r || self.seen[r.id] ||
-            ((self.backing || !self.soc) && self.mem_seen[r.id]==r.invalid) || req->get_resp_status()!=
+            ((self.backing || !self.i3d) && self.mem_seen[r.id]==r.invalid) || req->get_resp_status()!=
             (r.invalid ? vp::IO_RESP_INVALID : vp::IO_RESP_OK) || req->get_addr()!=r.address)
             self.fail("response address/status/identity scoreboard");
         if (!self.backing && self.functional && !r.invalid && req->get_is_write()) {
@@ -129,7 +129,7 @@ class Driver : public vp::Component {
                 if (r.strobes.empty() || r.strobes[i]) self.storage[r.destination][r.local+i]=r.bytes[i];
         }
         for (size_t i=0;!r.invalid && !req->get_is_write() && i<r.bytes.size();++i) {
-            uint64_t a=self.soc?self.offset+i:i;
+            uint64_t a=self.i3d?self.offset+i:i;
             uint8_t expected=self.functional ? self.storage[r.destination][r.local+i]
                 : (17*r.destination+13*a+(a>>8))&255;
             if (r.bytes[i]!=expected) { self.fail("response data scoreboard"); break; }
@@ -142,7 +142,7 @@ class Driver : public vp::Component {
         auto it=self.live.find(req->parent);
         if (it==self.live.end()) { self.fail("unknown downstream parent"); return vp::IO_REQ_DONE; }
         auto &r=*it->second;
-        if (self.soc && self.endpoint==0 && !req->get_data()) {
+        if (self.i3d && self.endpoint==0 && !req->get_data()) {
             // A legal inline full-packet read response; its buffer remains
             // alive until the original transaction completes through the NoC.
             r.memory_data.resize(req->get_size()); req->set_data(r.memory_data.data());
@@ -159,7 +159,7 @@ class Driver : public vp::Component {
             if (req->get_strb()[i]!=r.req.get_strb()[i]) self.fail("byte strobe changed");
         self.mem_seen[r.id]=true;
         for (uint64_t i=0;i<req->get_size();++i) {
-            uint64_t a=self.soc?self.offset+i:i;
+            uint64_t a=self.i3d?self.offset+i:i;
             if (self.functional) {
                 if (req->get_is_write()) {
                     if (!req->get_strb() || req->get_strb()[i]) self.storage[d][r.local+i]=req->get_data()[i];
@@ -213,7 +213,7 @@ class Driver : public vp::Component {
     }
 public:
     explicit Driver(vp::ComponentConf &conf) : vp::Component(conf),event(this,tick) {
-        auto j=get_js_config(); soc=j->get_child_int("soc"); sparse=j->get_child_int("sparse");
+        auto j=get_js_config(); i3d=j->get_child_int("i3d"); sparse=j->get_child_int("sparse");
         stress=j->get_child_int("stress"); n=j->get_child_int("nx")*j->get_child_int("ny");
         functional=j->get_child_int("functional");
         backing=j->get_child_int("backing");
@@ -223,11 +223,11 @@ public:
         progress_cycles=j->get_child_int("progress_cycles");
         if (!interleave_bytes || !memory_bytes || memory_bytes%interleave_bytes || progress_cycles<0)
             throw std::invalid_argument("invalid benchmark memory mapping or progress interval");
-        if (soc && endpoint==0 && functional) throw std::invalid_argument("inline protocol probe uses reads only");
-        if (functional && !soc) throw std::invalid_argument("functional suite requires soc=1");
+        if (i3d && endpoint==0 && functional) throw std::invalid_argument("inline protocol probe uses reads only");
+        if (functional && !i3d) throw std::invalid_argument("functional suite requires i3d=1");
         groups=j->get_child_int("groups"); repeats=j->get_child_int("repeats"); seed=j->get_child_int("seed");
         burst=j->get_child_int("burst"); offset=j->get_child_int("offset"); bytes=j->get_child_int("datawidth")/8;
-        count=functional?10:soc?n:(sparse?groups:n)*repeats; total=uint64_t(n)*count;
+        count=functional?10:i3d?n:(sparse?groups:n)*repeats; total=uint64_t(n)*count;
         pending.resize(n); denied.resize(n); sent.resize(n); seen.resize(total); mem_seen.resize(total);
         completed.resize(n);
         if (functional) {
