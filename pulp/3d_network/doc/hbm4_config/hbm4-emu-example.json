@@ -1,9 +1,0 @@
-{
-  "simulation": {
-    "addressmapping": "am_hbm4_emu_16Gb_pc_brc.json",
-    "mcconfig": "fr_fcfs_hbm4.json",
-    "memspec": "HBM4-emulation-4000.json",
-    "simconfig": "example.json",
-    "simulationid": "hbm4-emu-example"
-  }
-}

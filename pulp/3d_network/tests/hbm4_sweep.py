@@ -11,6 +11,7 @@ import platform
 import re
 import subprocess
 import time
+from dramsys_config import read_json
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
@@ -61,18 +62,17 @@ def collect(log, contexts):
 
 
 def main():
+    build = Path(os.environ.get('NETWORK3D_BUILD_DIR', ROOT/'build/network3d_hbm4')).resolve()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--contexts', nargs='+', type=int, default=[8,16,32,64,128,256])
-    parser.add_argument('--output', type=Path, default=HERE.parent/'doc/soc_context_b16_hbm4_results.json')
+    parser.add_argument('--output', type=Path, default=build/'soc_context_b16_hbm4_results.json',
+                        help='Results JSON (default: %(default)s)')
     parser.add_argument('--reuse', action='store_true', help='Verify and reuse existing complete logs')
     args = parser.parse_args()
-    build = Path(os.environ.get('NETWORK3D_BUILD_DIR', ROOT/'build/network3d_hbm4')).resolve()
-    config = Path(os.environ.get('DRAMSYS_PATH', build))/'dramsys_configs/hbm4-emu-example.json'
-    # Match hbm4.sh's loader search order and record the actual selected input.
-    systemc = Path(os.environ.get('SYSTEMC_HOME', ROOT/'third_party/systemc_install'))
-    search = [systemc/'lib64', systemc/'lib']
+    config = Path(os.environ.get('DRAMSYS_PATH', ROOT/'core/models/memory'))/'dramsys_configs/hbm4-emu-example.json'
+    # The installed runner prepends install/lib to the configured loader path.
+    search = [ROOT/'install/lib']
     search += [Path(p) for p in os.environ.get('LD_LIBRARY_PATH', '').split(':') if p]
-    search += [ROOT/'third_party/DRAMSys']
     library = next((p/'libDRAMSys_Simulator.so' for p in search
                     if (p/'libDRAMSys_Simulator.so').is_file()), None)
     if library is None:
@@ -81,8 +81,19 @@ def main():
     library = library.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     source_files = sorted(HERE.parent.glob('*.cpp')) + sorted(HERE.parent.glob('*.hpp')) + \
-        sorted(HERE.parent.glob('*.py')) + [HERE/p for p in ('driver.cpp','benchmark.py',
-        'hbm4_benchmark.py','prepare_hbm4.py','hbm4.sh','hbm4_sweep.py','build.sh','run.sh')]
+        sorted(HERE.parent.glob('*.py')) + sorted((HERE.parent/'benchmarks').glob('*.py')) + \
+        sorted((HERE.parent/'benchmarks').glob('*.cpp')) + \
+        [HERE/p for p in ('dramsys_config.py','hbm4_sweep.py')] + \
+        [ROOT/'pulp/targets/network3d_hbm4.py']
+    top = read_json(config)['simulation']
+    config_files = {'simulation': config}
+    for category in ('memspec', 'mcconfig', 'addressmapping', 'simconfig'):
+        ref = Path(top[category])
+        config_files[category] = config.parent / (ref if ref.parent != Path('.') else Path(category)/ref)
+    manifest = dict(changes=[], source={k:dict(path=str(p),sha256=digest(p))
+                                      for k,p in config_files.items()},
+                    resolved={k:dict(path=str(p.relative_to(config.parent)),sha256=digest(p))
+                              for k,p in config_files.items()})
     report = dict(timestamp_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         host=dict(hostname=platform.node(), platform=platform.platform(), python=platform.python_version()),
         parameters=dict(topology='fattree', routing='NCA_HASH', fabric=0, mode=1, num_x=32, num_y=32,
@@ -93,7 +104,7 @@ def main():
             transactions=1024**2, read_bytes=1024**3, repeats=1),
         dramsys_library=dict(path=str(library), sha256=digest(library)),
         source_sha256={str(p.relative_to(ROOT)):digest(p) for p in source_files},
-        resolved_config_manifest=json.loads((config.parent/'manifest.json').read_text()), runs=[])
+        resolved_config_manifest=manifest, runs=[])
     for item in report['resolved_config_manifest']['resolved'].values():
         if digest(config.parent/item['path']) != item['sha256']:
             raise RuntimeError('Prepared DRAMSys configuration changed; regenerate it and its manifest')
@@ -108,9 +119,10 @@ def main():
                 raise RuntimeError(f'Cannot reuse results with missing/changed simulation inputs: {run}')
         else:
             snapshot.write_text(json.dumps(expected_inputs,indent=2)+'\n')
-            env = dict(os.environ, NETWORK3D_RUN_DIR=str(run))
-            command = ['/usr/bin/time','-v','-o',str(stats),'bash',str(HERE/'hbm4.sh'),'run',
-                       f'--parameter=sc={contexts}',f'--parameter=mc={contexts}']
+            env = dict(os.environ)
+            command = ['/usr/bin/time','-v','-o',str(stats),'gvrun',
+                       '--target=network3d_hbm4',f'--work-dir={run}',
+                       f'--parameter=sc={contexts}',f'--parameter=mc={contexts}','run']
             print(f'Start X={contexts}: {log}', flush=True)
             start = time.perf_counter()
             with log.open('w') as stream:

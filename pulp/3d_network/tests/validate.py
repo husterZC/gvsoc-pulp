@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Compare real GVSoC IO_v2 runs with the RTL repository's recorded benchmarks.
+"""Compare the installed network3d target with RTL benchmark references.
 
-No fitted latencies or golden cycle counts enter the C++ models. Historical
-source relocation is resolved by content hashes. Current production RTL and
-current benchmark sources must match the latest recorded source manifests.
+Reference source hashes are checked before running comparisons. No fitted
+latencies or golden cycle counts enter the C++ models.
 """
 import argparse
 import datetime
@@ -16,6 +15,7 @@ import subprocess
 import time
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[3]
 
 
 def metrics(node, path=''):
@@ -85,26 +85,51 @@ def provenance(rtl):
                    if k.endswith(('.sv', '.svh'))})
     j = json.loads((rtl/'docs/all_to_sparse_group_results.json').read_text())
     hashes.update({k: v for k, v in j['benchmark_files_sha256'].items() if k.endswith('.sv')})
-    # all-to-all was refactored to a common generator; record its current hash
-    # separately, without claiming its old wrapper hash matches after refactoring.
+    # Check the sources covered by the reference manifests. Record the current
+    # workload sources separately; recording alone does not verify a reference.
     for name, expected in hashes.items():
         if digest(rtl/name) != expected:
             raise RuntimeError(f'Stale RTL references: source hash changed: {name}')
     current = {str(p.relative_to(rtl)): digest(p)
                for p in (rtl/'target/src/benchmark').rglob('*.sv')}
     return dict(verified_rtl_sha256=hashes, current_benchmark_sha256=current,
-                historical_all_to_all_note='Old wrappers were refactored; cycle references retained. '
-                'Current production RTL hashes verified; current workload generator hashed separately.')
+                reference_scope='Only source hashes present in the reference manifests are verified; '
+                'the remaining current benchmark sources are recorded separately.')
+
+
+def run_gvsoc(folder, parameters, timeout):
+    folder.mkdir(parents=True, exist_ok=True)
+    command = ['gvrun', '--target=network3d', f'--work-dir={folder}']
+    command += [f'--parameter={key}={value}' for key, value in parameters.items()]
+    command += ['run']
+    log = folder/'simulation.log'
+    start = time.perf_counter()
+    with log.open('w') as stream:
+        result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
+    elapsed = time.perf_counter()-start
+    text = log.read_text()
+    lines = [line.removeprefix('NETWORK3D_RESULT ') for line in text.splitlines()
+             if line.startswith('NETWORK3D_RESULT ')]
+    if result.returncode or len(lines)!=1 or 'NETWORK3D_FAIL' in text:
+        raise RuntimeError(f'Benchmark failed for {parameters}; see {log}')
+    measured = json.loads(lines[0])
+    if measured['status'] != 'PASS':
+        raise RuntimeError(f'Benchmark failed for {parameters}; see {log}')
+    measured['process_wall_seconds'] = elapsed
+    return measured
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rtl', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--work-dir', type=Path, default=ROOT/'build/network3d/validation',
+                        help='Simulation logs and configurations (default: %(default)s)')
     parser.add_argument('--quick', action='store_true', help='skip 1024-terminal SoC B16 sweeps')
     parser.add_argument('--native-reference', type=Path, help='results.json from rtl_holdout.py')
     args = parser.parse_args()
     rtl = args.rtl.resolve()
+    work_dir = args.work_dir.resolve()
     report = dict(status='RUNNING', date_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                   host=platform.node(), threshold_percent=5.0, quick=args.quick,
                   provenance=provenance(rtl), tests=[], protocol_tests=[])
@@ -118,21 +143,11 @@ def main():
     report['model_sha256'] = {str(p.relative_to(HERE.parent)): digest(p)
                              for p in HERE.parent.rglob('*') if p.suffix in ('.hpp', '.cpp', '.py', '.sh')}
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    for record in cases(rtl, args.native_reference):
+    for index, record in enumerate(cases(rtl, args.native_reference)):
         p = record['parameters']
         if args.quick and p.get('soc') and p.get('nx')==32 and p.get('burst')==16:
             continue
-        command = ['bash', str(HERE/'run.sh')]
-        for key, value in p.items():
-            command += ['--parameter', f'{key}={value}']
-        start = time.perf_counter()
-        result = subprocess.run(command, capture_output=True, text=True, timeout=1800)
-        lines = [line.removeprefix('NETWORK3D_RESULT ') for line in result.stdout.splitlines()
-                 if line.startswith('NETWORK3D_RESULT ')]
-        if result.returncode or len(lines)!=1 or 'NETWORK3D_FAIL' in result.stderr:
-            raise RuntimeError(f'{p}: {result.stdout}\n{result.stderr}')
-        measured = json.loads(lines[0])
-        measured['process_wall_seconds'] = time.perf_counter()-start
+        measured = run_gvsoc(work_dir/f'rtl_{index:02}', p, timeout=1800)
         gold = record['rtl']
         deviation = 100*abs(measured['runtime_cycles']/float(gold['runtime_cycles'])-1)
         count = int(gold.get('transactions', gold.get('total_beats')))
@@ -158,15 +173,9 @@ def main():
     protocol_cases += [dict(soc=1,fabric=1,nx=3,ny=2,sc=16,mc=16,burst=16,stress=1,endpoint=endpoint)
                        for endpoint in (0,2)]
     protocol_cases += [dict(soc=1,fabric=1,nx=3,ny=2,functional=1,endpoint=2)]
-    for p in protocol_cases:
-        command=['bash',str(HERE/'run.sh')]
-        for key,value in p.items(): command+=['--parameter',f'{key}={value}']
-        result=subprocess.run(command,capture_output=True,text=True,timeout=180)
-        lines=[line.removeprefix('NETWORK3D_RESULT ') for line in result.stdout.splitlines()
-               if line.startswith('NETWORK3D_RESULT ')]
-        if result.returncode or len(lines)!=1 or 'NETWORK3D_FAIL' in result.stderr:
-            raise RuntimeError(f'Protocol case {p}: {result.stdout}\n{result.stderr}')
-        report['protocol_tests'].append(dict(parameters=p,gvsoc=json.loads(lines[0]),status='PASS'))
+    for index, p in enumerate(protocol_cases):
+        measured = run_gvsoc(work_dir/f'protocol_{index:02}', p, timeout=180)
+        report['protocol_tests'].append(dict(parameters=p,gvsoc=measured,status='PASS'))
         print(f'PASS protocol {p}',flush=True)
     report['max_deviation_percent'] = max(r['deviation_percent'] for r in report['tests'])
     report['status'] = 'PASS' if all(r['status']=='PASS' for r in report['tests']) else 'FAIL'

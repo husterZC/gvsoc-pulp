@@ -10,9 +10,11 @@
 #include <unordered_set>
 #include <vector>
 
-// The repository's DRAMSys 5 C ABI has a two-argument add_dram and FIFO
-// completion streams. Geometry is read by the Python component, rather than
-// relying on the newer, incompatible add_dram(..., GvsocMemspec*) extension.
+// Native completions form FIFO streams. GVSoC's DRAMSys library uses
+// add_dram(..., GvsocMemspec*).
+// Passing nullptr requests no geometry output, which the Python component
+// already derives from the selected memspec.
+struct GvsocMemspec;
 class DramsysEndpoint : public vp::Component {
     struct Monitor : sc_core::sc_module {
         DramsysEndpoint &owner;
@@ -43,7 +45,6 @@ class DramsysEndpoint : public vp::Component {
     uint64_t read_requests=0, write_requests=0, native_reads=0, native_writes=0;
     uint64_t read_bytes=0, write_bytes=0, response_denials=0, request_denials=0, peak_reads=0;
 
-    int (*add_dram)(char*,char*);
     int (*can_accept)(int), (*has_read)(int), (*has_write)(int), (*get_write)(int);
     void (*get_read)(int,uint64_t,void*);
     void (*put_byte)(int,int,int), (*put_strobe)(int,int,int);
@@ -234,16 +235,20 @@ public:
         if (!chunk || chunk>2048 || (chunk&(chunk-1))) throw std::invalid_argument("invalid native DRAM burst size");
         if (sc_core::sc_get_time_resolution()!=sc_core::sc_time(1,sc_core::SC_PS))
             throw std::runtime_error("DRAMSys endpoint requires 1 ps SystemC resolution");
-        library=dlopen(js->get_child_str("library").c_str(),RTLD_NOW|RTLD_GLOBAL);
+        // Match memory.dramsys: unused optional library facilities (such as
+        // ELF loading) need not be resolved for a request/response endpoint.
+        library=dlopen(js->get_child_str("library").c_str(),RTLD_LAZY|RTLD_GLOBAL);
         if (!library) throw std::runtime_error(dlerror());
-        symbol(add_dram,"add_dram"); symbol(can_accept,"dram_can_accept_req");
+        symbol(can_accept,"dram_can_accept_req");
         symbol(has_read,"dram_has_read_rsp"); symbol(has_write,"dram_has_write_rsp");
         symbol(get_read,"dram_get_read_rsp"); symbol(get_write,"dram_get_write_rsp");
         symbol(put_byte,"dram_write_buffer"); symbol(put_strobe,"dram_write_strobe");
         symbol(send_req,"dram_send_req"); symbol(preload,"dram_preload_byte");
         symbol(callbacks,"dram_register_async_callback");
         auto resources=js->get_child_str("resources"), config=js->get_child_str("config");
-        id=add_dram(const_cast<char*>(resources.c_str()),const_cast<char*>(config.c_str()));
+        int (*add_dram)(char*,char*,GvsocMemspec*);
+        symbol(add_dram,"add_dram");
+        id=add_dram(const_cast<char*>(resources.c_str()),const_cast<char*>(config.c_str()),nullptr);
         callbacks(id,this,completion,capacity);
         if (js->get_child_bool("benchmark_init")) {
             int endpoint=js->get_child_int("endpoint_id");

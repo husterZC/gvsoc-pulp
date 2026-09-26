@@ -9,26 +9,29 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from dramsys_config import read_json
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, default=HERE.parent/'doc/hbm4_checks.json')
-    args = parser.parse_args()
     build = Path(os.environ.get('NETWORK3D_BUILD_DIR', ROOT/'build/network3d_hbm4')).resolve()
-    original = Path(os.environ.get('DRAMSYS_PATH', build))/'dramsys_configs/hbm4-emu-example.json'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=build/'hbm4_checks.json',
+                        help='Results JSON (default: %(default)s)')
+    args = parser.parse_args()
+    original = Path(os.environ.get('DRAMSYS_PATH', ROOT/'core/models/memory'))/'dramsys_configs/hbm4-emu-example.json'
     results = []
 
     def run(name, config=original, **parameters):
         folder = build/'checks'/name
         folder.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ, NETWORK3D_RUN_DIR=str(folder), DRAMSYS_PATH=str(config.parent.parent))
+        env = dict(os.environ, DRAMSYS_PATH=str(config.parent.parent))
         params = dict(fabric=1, nx=2, ny=2, sc=32, mc=32)
         params.update(parameters)
-        command = ['bash',str(HERE/'hbm4.sh'),'run'] + [f'--parameter={k}={v}' for k,v in params.items()]
+        command = ['gvrun', '--target=network3d_hbm4', f'--work-dir={folder}'] + \
+            [f'--parameter={k}={v}' for k,v in params.items()] + ['run']
         log = folder/'simulation.log'
         with log.open('w') as stream:
             subprocess.run(command,env=env,stdout=stream,stderr=subprocess.STDOUT,check=True)
@@ -50,16 +53,15 @@ def main():
     for name in ('slow_clock','small_queues'):
         dest = build/'checks'/name/'dramsys_configs'
         shutil.copytree(original.parent,dest,dirs_exist_ok=True)
-        top = json.loads((dest/original.name).read_text())['simulation']
+        top = read_json(dest/original.name)['simulation']
         if name=='slow_clock':
-            path = dest/'memspec'/top['memspec']
-            doc = json.loads(path.read_text())
+            path = dest/'memspec'/Path(top['memspec']).name
+            doc = read_json(path)
             timing = doc['memspec']['memtimingspec']
             timing['tCK'] *= 2
-            timing['clkMhz'] /= 2
         else:
-            path = dest/'mcconfig'/top['mcconfig']
-            doc = json.loads(path.read_text())
+            path = dest/'mcconfig'/Path(top['mcconfig']).name
+            doc = read_json(path)
             doc['mcconfig']['RequestBufferSize'] = 1
             doc['mcconfig']['MaxActiveTransactions'] = 1
         path.write_text(json.dumps(doc,indent=2)+'\n')

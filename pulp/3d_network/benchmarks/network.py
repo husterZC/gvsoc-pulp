@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib
 import gvsoc.systree
-import gvsoc.runner
 import vp.clock_domain
 from gvsoc.signature import IoV2SingleReq, IoV2Beat
 from gvrun.parameter import TargetParameter
@@ -26,8 +25,8 @@ class Chip(gvsoc.systree.Component):
             dram_type = TargetParameter(self, name='dram_type', value='hbm4-emu-example.json',
                                        cast=str, description='DRAMSys simulation JSON').get_value()
         clock = vp.clock_domain.Clock_domain(self, 'clock', frequency=p['frequency'])
-        # Register the endpoint source for focused builds whose default target
-        # is native-only; instantiated endpoint models use this same library.
+        # Include the RAM endpoint when building the default native target so
+        # the installed benchmark can also run with soc=1.
         if not p['soc']:
             build_endpoint = MemoryEndpoint(self, 'endpoint_build', size=1)
             clock.o_CLOCK(build_endpoint.i_CLOCK())
@@ -46,7 +45,7 @@ class Chip(gvsoc.systree.Component):
                 routing_mode=p['mode'], data_width=p['datawidth'])
         driver = gvsoc.systree.Component(self, 'driver')
         driver.add_properties(p)
-        driver.add_sources(['pulp/3d_network/tests/driver.cpp'])
+        driver.add_sources(['pulp/3d_network/benchmarks/traffic.cpp'])
         for i in range(p['nx'] * p['ny']):
             driver.itf_bind(f'output_{i}', network.i_INPUT(i), signature=IoV2SingleReq())
             backing = gvsoc.systree.SlaveItf(driver, f'input_{i}', signature=IoV2SingleReq())
@@ -78,9 +77,3 @@ class Chip(gvsoc.systree.Component):
                 network.o_OUTPUT(i, backing)
         clock.o_CLOCK(driver.i_CLOCK())
         clock.o_CLOCK(network.i_CLOCK())
-
-
-class Target(gvsoc.runner.Target):
-    gapy_description = 'RTL-equivalent native/SoC IO_v2 network benchmark'
-    model = Chip
-    name = 'benchmark'
