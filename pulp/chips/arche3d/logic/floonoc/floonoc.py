@@ -48,7 +48,7 @@ class FlooNoc2dMesh(gvsoc.systree.Component):
     """
     def __init__(self, parent: gvsoc.systree.Component, name, width: int,
             dim_x: int, dim_y:int, ni_outstanding_reqs: int=8, router_input_queue_size: int=2, atomics: int=0, collective: int=0,
-            edge_node_alias: int=0, edge_node_alias_start_bit: int=48,
+            edge_node_alias: int=0, edge_node_alias_start_bit: int=48, wakeup_addr: int=-1,
             interleave_enable: int=0, interleave_region_base: int=0, interleave_region_size: int=0, interleave_granularity: int=0, interleave_bit_start: int=0, interleave_bit_width: int=0):
         super(FlooNoc2dMesh, self).__init__(parent, name)
 
@@ -68,6 +68,7 @@ class FlooNoc2dMesh(gvsoc.systree.Component):
         self.add_property('router_input_queue_size', router_input_queue_size)
         self.add_property('atomics', atomics)
         self.add_property('collective', collective)
+        self.add_property('wakeup_addr', wakeup_addr)
         self.add_property('interleave_enable', interleave_enable)
         self.add_property('interleave_region_base', interleave_region_base)
         self.add_property('interleave_region_size', interleave_region_size)
@@ -108,7 +109,7 @@ class FlooNoc2dMesh(gvsoc.systree.Component):
         self.get_property('network_interfaces').append([x, y])
 
     def o_MAP(self, itf: gvsoc.systree.SlaveItf, base: int, size: int,
-            x: int, y: int):
+            x: int, y: int, name: str=None):
         """Binds the output of a node to a target, associated to a memory-mapped region.
 
         Parameters
@@ -120,7 +121,8 @@ class FlooNoc2dMesh(gvsoc.systree.Component):
         y: int
             Y position of the target in the grid
         """
-        name = itf.component.name
+        if name is None:
+            name = itf.component.name
         self.__add_mapping(name, base=base, size=size, x=x, y=y)
         self.itf_bind(name, itf, signature='io')
 
@@ -185,4 +187,3 @@ class FlooNocClusterGrid(FlooNoc2dMesh):
             The slave interface
         """
         return self.i_INPUT(x+1, y+1)
-

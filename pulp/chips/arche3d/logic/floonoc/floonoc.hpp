@@ -129,6 +129,9 @@ public:
     // Whether Support Collective
     bool collective;
 
+    // A single multicast command address; ordinary mappings refer to real L1.
+    uint64_t wakeup_addr;
+
     // Whether Support HBM node aliasing
     uint64_t edge_node_alias;
     uint64_t edge_node_alias_start_bit;
@@ -159,6 +162,7 @@ private:
     // Set of memory-mapped entries, with one for each target. They give information about each
     // target (base address, size, position)
     std::vector<Entry> entries;
+    Entry wakeup_entry;
     // SIze of the routers input queues. Pushing more requests than this size will block the
     // output queue of the sender.
     int router_input_queue_size;

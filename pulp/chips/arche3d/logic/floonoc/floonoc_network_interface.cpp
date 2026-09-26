@@ -176,6 +176,7 @@ void NetworkInterface::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         // Fill-in information. Request data is used to store temporary information that we will
         // need later
         req->init();
+        req->status = vp::IO_REQ_OK;
         req->arg_alloc(FlooNoc::REQ_NB_ARGS);
         *req->arg_get(FlooNoc::REQ_DEST_NI) = (void *)_this;
         *req->arg_get(FlooNoc::REQ_DEST_BURST) = (void *)burst;
@@ -196,18 +197,14 @@ void NetworkInterface::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         *req->arg_get(FlooNoc::REQ_COL_MASK) = (void *)0;
         *req->arg_get(FlooNoc::REQ_PEND_KIDS) = (void *)0;
         *req->arg_get(FlooNoc::REQ_MOMENTUM) = (void *)FlooNoc::MOMENTUM_ZERO;
-        if (_this->noc->collective)
+        if (_this->noc->collective && base == _this->noc->wakeup_addr)
         {
-            uint8_t collective_type = burst->get_payload()[0];
-            _this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Collective] preload[0] of burst %d\n",collective_type);
-            if (collective_type>0 && collective_type<8)
-            {
-                uint8_t row_mask = burst->get_payload()[1];
-                uint8_t col_mask = burst->get_payload()[2];
-                req->set_int(FlooNoc::REQ_COLL_TYPE, collective_type);
-                req->set_int(FlooNoc::REQ_ROW_MASK, row_mask);
-                req->set_int(FlooNoc::REQ_COL_MASK, col_mask);
-            }
+            uint32_t row_mask, col_mask;
+            std::memcpy(&row_mask, burst->get_payload() + 1, 4);
+            std::memcpy(&col_mask, burst->get_payload() + 5, 4);
+            req->set_int(FlooNoc::REQ_COLL_TYPE, 1);
+            req->set_int(FlooNoc::REQ_ROW_MASK, row_mask);
+            req->set_int(FlooNoc::REQ_COL_MASK, col_mask);
         }
 
         // Get the target entry corresponding to the current base
@@ -247,7 +244,7 @@ void NetworkInterface::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
             }
 
             // Store information in the request which will be needed by the routers and the target
-            req->set_addr(base - entry->base);
+            req->set_addr(base == _this->noc->wakeup_addr ? base : base - entry->base);
             *req->arg_get(FlooNoc::REQ_DEST_X) = (void *)(long)entry->x;
             *req->arg_get(FlooNoc::REQ_DEST_Y) = (void *)(long)entry->y;
             *req->arg_get(FlooNoc::REQ_SRC_X) = (void *)(long)_this->x;
@@ -312,6 +309,10 @@ vp::IoReqStatus NetworkInterface::req(vp::Block *__this, vp::IoReq *req)
     uint64_t offset = req->get_addr();
     uint8_t *data = req->get_data();
     uint64_t size = req->get_size();
+
+    if (offset == _this->noc->wakeup_addr &&
+        (!_this->noc->collective || !req->get_is_write() || size != 4 ||
+         req->get_payload()[0] != 1)) return vp::IO_REQ_INVALID;
 
     _this->trace.msg(vp::Trace::LEVEL_DEBUG, "Received burst (burst: %p, offset: 0x%llx, size: 0x%x, is_write: %d, op: %d)\n",
         req, offset, size, req->get_is_write(), req->get_opcode());

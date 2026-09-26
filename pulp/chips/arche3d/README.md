@@ -18,12 +18,14 @@ module dependencies.
 flowchart BT
   subgraph Logic[Logic die: 32 × 32 SoftHier tiles]
     PE[6 cores + Spatz + RedMule] <--> L1[384 KiB banked L1 per tile]
+    PE --> IC[Shared 32-KiB instruction cache]
     PE --> DMA2[Logic-die DMA]
     DMA2 <--> Mesh[1024-bit 2D NoC]
     PE --> DMA3[I3D DMA on core n-2]
     DMA3 <--> L1
   end
   DMA3 <-->|IO_v2, 512-bit AXI| I3D[Interconnect die: fat tree / mesh / crossbar]
+  IC <-->|512-bit refills, shared source with DMA| I3D
   I3D <--> DRAM[3D DRAM die: 1024 DRAMSys HBM4 channels]
 ```
 
@@ -93,23 +95,126 @@ address space per channel, not the physical capacity of the DRAMSys memspec.
 
 | Region | Address | Scope |
 | --- | --- | --- |
-| L1 | `0x00000000`, 384 KiB | Local to each cluster |
-| Stack | `0x10000000`, 128 KiB | Private stack slice per core |
+| L1 | `0x00000000`, 384 KiB | Data and all core stacks, shared within each cluster |
+| Stacks within L1 | `0x0005a000`–`0x0005ffff`, 24 KiB | Six downward-growing stacks, 4 KiB per core |
 | Zero memory | `0x18000000`, 128 KiB | Logic-die DMA |
 | Cluster registers | `0x20000000`, 512 B | SoftHier tile |
-| Remote L1 | `0x30000000 + cluster_id * 0x60000` | Logic-die DMA / data NoC |
-| Synchronization | `0x40000000 + cluster_id * 0xc0` | Separate synchronization NoC |
-| Instructions | `0x80000000`, 64 KiB | ELF replicated into each tile |
+| Remote L1 | `0x30000000 + cluster_id * 0x60000` | Core loads/stores via sync NoC; logic DMA via data NoC |
+| Wakeup command | `0x50000000`, 4 B | Multicast notification over the sync NoC |
+| Program alias | `0x80000000`, 32 MiB | RV32 read/execute alias, shared 32-KiB cache per cluster |
 | System registers | `0x90000000`, 64 KiB | Runtime control |
-| 3D DRAM | `0x100000000`, 32 MiB total | I3D DMA, 32 KiB per channel |
+| 3D DRAM | `0x100000000`, 64 MiB total | 64 KiB per channel, 32-KiB interleaving |
+| Shared program in DRAM | `0x100000000`–`0x101ffffff` | First stripe, one ELF image for the system |
+| Application DRAM | `0x102000000`–`0x103ffffff` | Second stripe, 32 KiB per channel for DMA data |
+
+There is no separate stack memory or mapping at `0x10000000`. The default
+`cluster_stack_size` reserves `num_core_per_cluster * 4096` bytes at the top
+of TCDM; `cluster_stack_base` is the start of that reservation. Each core gets
+an equal, 16-byte-aligned slice. Core 0 starts with SP `0x60000`, core 1 with
+`0x5f000`, through core 5 with `0x5b000`. Stacks use the same banked L1 ports
+as ordinary data and contend with other L1 users. The linker confines data,
+BSS, and the available heap to the region below `0x5a000`, reserving the first
+64 bytes as before. Oversized data/BSS fails at link time. Rebuild software
+after changing this layout; binaries built for the old stack map will not run.
+
+There is **no separate synchronization memory**. The remote L1 alias accesses
+exactly the same banks as local loads/stores, including application data and
+stacks. Scalar accesses take the 32-bit synchronization NoC; the logic-die DMA
+continues using the 1024-bit data NoC. The SDK provides
+`arche3d_remote_l1_address(cluster_id, local_address)` to translate an L1 pointer.
+For example, core loads/stores through a volatile pointer to that address can
+exchange data with another cluster without using either DMA. Remote word
+atomics also use the synchronization path.
+
+The full remote-L1 range is `0x30000000`–`0x47ffffff`, so the special wakeup
+address is **`sync_wakeup_addr=0x50000000`**, outside that range. There are no
+per-cluster sync-memory windows and no `sync_interleave`/`sync_special_mem`
+parameters. A write to the wakeup command multicasts one notification to the
+Cartesian product of the programmed 32-bit X/Y masks: bit `x` selects column
+`x`, and bit `y` selects row `y`. The command completes after delivery to all
+selected clusters. An empty mask sends nothing; bits outside the grid are
+ignored.
+
+The SDK provides `arche3d_wakeup(x_mask, y_mask)` and
+`arche3d_wakeup_wait()`. One designated core per cluster waits with a blocking
+MMIO access, then can use the local core barrier to release its peers. This is
+a cluster notification, not a core interrupt. Notifications arriving before a
+wait are counted and consumed one at a time. The mask registers are shared
+within a cluster; serialize programming if more than one core sends wakeups.
+Wakeups and remote L1 traffic contend on the same modeled sync NoC.
+
+| Cluster-register offset | Access | Purpose |
+| --- | --- | --- |
+| `0x20` | Write | Consume one wakeup; block if none is pending |
+| `0x24` | Read/write | Destination X bitmap |
+| `0x28` | Read/write | Destination Y bitmap |
+| `0x2c` | Read | Pending notification count |
+| `0x30` | Read | Total received notifications (32-bit counter) |
 
 Cluster IDs retain SoftHier's `y * num_cluster_x + x` numbering. I3D terminals
 use `x * num_cluster_y + y`. The SDK provides both IDs and
 `arche3d_dram_address(terminal, local_offset)`, which applies the configured
 interleaving. 64-bit DMA addresses reach DRAM above the RV32 scalar address
-space. Remote L1 and synchronization ranges overlap numerically in the supplied
-32 × 32 map but use separate physical paths; a scalar synchronization access
-does not select the data NoC.
+space. The scalar remote-L1 range and wakeup command do not overlap.
+
+## Instruction cache and boot
+
+Each cluster has one **32-KiB shared instruction cache**, reusing the existing
+PULP Snitch cache implementation in [`logic/icache.cpp`](logic/icache.cpp).
+The local adaptation reads ordinary GVSoC properties, so it also works when
+runtime parameters cause GVSoC to use its JSON configuration path. It also
+permits hits while another line is refilling, with immediate victim
+invalidation to protect in-flight data. The shared Snitch model and GVSoC
+framework are unchanged. The defaults are direct mapped, 64-byte lines,
+one outstanding refill, and one independent **256-bit fetch
+port per core**. The ISS fetches 32-byte blocks; a cache hit transfers that block
+in one cycle without competing with the other cores' fetch ports, and resident
+hits remain available during unrelated refills. Cache misses
+use the same **512-bit IO_v2 I3D source** as the dedicated DMA. The source
+adapter arbitrates requests and assigns distinct AXI IDs across both clients.
+The cache is instruction/read-only; it also serves program constants and the
+initial data image. It is not an L1 data cache.
+
+RV32 cores cannot use `0x100000000` as their PC. `instruction_base=0x80000000`
+is an executable alias: cache refills translate it to `dram3d_start_base`.
+There is no instruction-memory component behind this alias. The first stripe
+across all channels is reserved for one shared program image. The approved
+64-KiB channel window leaves a second 32-KiB stripe for application data.
+Use `arche3d_dram_data_address(terminal, offset)` for this storage;
+`arche3d_dram_address` remains the raw physical-address helper.
+
+Boot proceeds as follows:
+
+1. At simulation initialization, one ELF snapshot is broadcast directly to
+   every cache. The model copies data, valid tags and line state for the
+   entry-containing window, up to 32 KiB. This preheating takes **zero simulated
+   cycles** and issues no I3D/DRAMSys requests. It models an already warm cache;
+   it does not model the hardware cost of warming it.
+2. One system `ElfLoader` writes the ELF's loadable segments into DRAM through
+   I3D. The linker places text/rodata and the initial data image in this region.
+3. After the DRAM writes complete, the system releases all cores together.
+   `ARCHE3D_BOOT` reports `preheat_mode: direct`, `preheat_cycles: 0`, and the
+   load and release cycles. The ELF image is stored once in DRAM so ordinary
+   misses can fetch it later.
+4. Cluster core 0 copies initialized data from the shared image into local L1,
+   clears local BSS, and releases its peers through the local barrier. Each
+   core retains its 4-KiB L1 stack and calls `main()`.
+
+Programs larger than the preheated window use demand refills during execution.
+Core `fence.i` signals invalidate the shared cache. No code/data coherence is
+provided for DMA writes to executable memory; keep application buffers in the
+second stripe. `icache_size`, `icache_line_size`, and `icache_core_width` are
+hardware configuration parameters. The obsolete `instruction_mem_base` and
+`instruction_mem_size` fields have been removed. **Rebuild existing ELFs**:
+the loader rejects the old per-cluster L1 load-segment layout.
+
+`ARCHE3D_RESULT` separates `boot_cycles`, total simulation cycles, and the
+existing DMA benchmark interval. `icache_preloaded_lines` counts lines copied
+directly across all clusters; these are excluded from `icache_refills` and
+`icache_runtime_refills`. A program that fits in the preheated
+window should have zero runtime refills unless it invalidates the cache.
+These instruction timings are a configured GVSoC model, not an RTL-calibrated
+cache implementation.
 
 ## DMA contract
 
@@ -133,18 +238,18 @@ power-of-two source stride. Descriptor settings are snapshotted at launch;
 completion IDs retire in descriptor order even if bursts return out of order.
 Collective operations are rejected with a fatal diagnostic before entering I3D.
 The logic-die DMA retains its existing collective capability and interfaces.
-Its inherited collective row/column masks remain 16 bits; extending those masks
-to cover a full 32 × 32 collective is outside this initial I3D integration.
+Its inherited DMA collective row/column masks remain 16 bits. The separate
+sync-NoC wakeup multicast uses 32-bit destination bitmaps for the full grid.
 
 ## Software and benchmark
 
 The separate `arche3d_sdk` submodule contains a new bare-metal runtime, startup,
 generated linker map, DMA API, and applications. Its runtime initializes BSS,
-assigns stacks, synchronizes local cores, reports traps and exit status, and
+assigns stacks, copies local initialized data, synchronizes local cores, reports traps and exit status, and
 waits for every cluster to finish. The system-register barrier is a control
 facility outside the measured data path; it does not model synchronization NoC
 contention. The existing synchronization NoC remains connected for applications
-that need to measure it.
+that need to measure remote scalar L1 accesses or multicast wakeups.
 
 `alltoall` runs on the I3D DMA core in every cluster. Source terminal `s` reads
 one 16-beat burst from each endpoint `(s+k) mod 1024`. Two queued 2D descriptors
@@ -154,8 +259,11 @@ destination, burst size, completion, and live ID. For byte-by-byte response
 checking, add `--parameter=memory_init=pattern`; this enables the same initial
 pattern as `network3d_hbm4` and a passive DMA data checker.
 
-`network_cycles` measures first AXI acceptance to last AXI response, with the
-benchmark's half-cycle convention. `software_cycles` includes descriptor issue,
+`network_cycles` measures the first DMA request accepted by the I3D source
+adapter through its last DMA response, with the benchmark's half-cycle convention.
+It includes time queued in that adapter. `peak_outstanding` likewise includes
+queued DMA requests; it does not count only occupied fabric source contexts.
+`software_cycles` includes descriptor issue,
 L1 drain, polling and completion reporting after the global start barrier.
 `total_cycles` also includes boot. `wall_seconds` is the simulation interval;
 use `/usr/bin/time` around `gvrun` to include Python elaboration and model loading.
@@ -170,5 +278,8 @@ its own data.
 
 `queue` stresses descriptor/burst backpressure, reuses AXI IDs over 512 reads,
 and checks that a following empty gather waits for older transfers. The
-[one-tile fixture](../../../tests/arche3d/README.md) runs these functional tests
-without constructing the full chip.
+[small software fixture](../../../tests/arche3d/README.md) runs these functional
+tests without constructing the full chip. Its two- or four-tile mode also runs `memory`,
+which checks all core stacks, data/BSS initialization, and direct remote L1
+loads, stores, and atomics. Its four-tile mode also runs `wakeup` to check
+selective multicast, queued notifications, and blocked receivers.

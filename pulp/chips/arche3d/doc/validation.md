@@ -1,11 +1,90 @@
 # arche3d validation
 
-Validated on 2026-09-26 using the default architecture and the conventional
-GVSoC build/run flow in the [architecture guide](../README.md).
+Validated on 2026-09-26 using the conventional GVSoC build/run flow in the
+[architecture guide](../README.md). The current 32 × 32 software all-to-all
+benchmark passes in **45,578.5 DMA cycles**, **0.07465%** above the recorded
+45,544.5-cycle network-only reference. Caches are initialized directly at time
+zero; cores start at cycle 62 and incur no runtime instruction-cache refills
+in this application. The current default also uses TCDM stacks, remote L1 and
+multicast wakeup on the sync NoC, and 64 KiB per DRAM channel.
 Both GVSoC and DRAMSys were built in `Release` mode. The host was an AMD Ryzen 7
 5800X; wall times describe this machine and are not simulated hardware timing.
 
-## Full software all-to-all benchmark
+## Current full benchmark with direct cache initialization
+
+The production target has 1,024 clusters / 6,144 cores, the level-3 Adaptive NCA
+fat tree, eight source and memory contexts, and 1,024 HBM4 DRAMSys channels.
+Every cluster reads one B16 burst from every endpoint, reusing its L1 buffer.
+The clock is 1 GHz, AXI data width is 512 bits, and channel space/interleaving
+is 64 KiB / 32 KiB. All reads use the second stripe, at endpoint-local offset
+`0x8000`, so the program image in the first stripe remains intact.
+
+| Metric | Current measurement |
+| --- | ---: |
+| DMA interval (`network_cycles`) | **45,578.5 cycles** |
+| Difference from 45,544.5-cycle reference | **+34 cycles / +0.07465%** |
+| DMA submission interval (`injection_cycles`) | 34,275.5 cycles |
+| Software interval after start barrier | 45,628 cycles |
+| Direct preheating | **0 cycles / 0 DRAM reads** |
+| Program load completion / core release | 61 / 62 cycles |
+| Total, including boot and runtime initialization | 46,524 cycles |
+| Directly initialized cache lines | 9,216 (9 per cluster) |
+| Runtime instruction-cache refills | **0** |
+| Completed B16 reads / checked data | 1,048,576 / 1 GiB |
+| Peak queued plus in-flight DMA requests | 262,102 |
+| Simulation wall time | 923.565545 s (15 min 24 s) |
+| Whole-command wall time | 1,277.01 s (21 min 17 s) |
+| Maximum resident memory | 17.894 GiB |
+
+**PASS, exit status 0.** Each of the 1,024 endpoints reports exactly 1,024 reads,
+1 MiB returned, 32,768 native DRAM reads, and zero pending requests. All 1 GiB
+of response data passed the passive checker. The single loader writes 524 bytes
+to channel 0; there are no other writes. No cache-preheat reads appear in the
+endpoint totals.
+
+The DMA counters are measured at the DMA-facing side of the shared I3D source
+adapter. They include queued requests, so the submission interval and peak count
+are not directly comparable with the earlier direct-to-fabric source counters.
+The physical source-context limit remains eight per cluster. The DMA interval
+still covers completion of the entire all-to-all workload.
+
+The DRAMSys simulation, memspec, controller, address-mapping and simulator-option
+files are hash-identical to the reference. The new cache/data layout moves DMA
+reads from endpoint-local offset zero to `0x8000`, and direct preheating does not
+warm DRAM timing state. The comparison therefore measures the updated architecture,
+not an identical initial DRAM state. No model parameter forces the cycle result.
+
+After environment setup and `make dramsys_preparation`:
+
+```bash
+make cfg=default TARGETS=arche3d build
+make cfg=default app=alltoall arche3d-sw
+mkdir -p build/arche3d/validation/direct_preheat
+/usr/bin/time -v gvrun --target=arche3d --parameter=config=default \
+    --parameter=memory_init=pattern \
+    --binary=build/arche3d/sw/default/alltoall/alltoall.elf \
+    --work-dir=build/runs/arche3d_direct_preheat_alltoall_32x32 run \
+    > build/arche3d/validation/direct_preheat/alltoall_32x32.log 2>&1
+```
+
+The observed result was:
+
+```text
+ARCHE3D_RESULT {"status":"PASS","clusters":1024,"transactions":1048576,"bytes":1073741824,"peak_outstanding":262102,"network_cycles":45578.5,"injection_cycles":34275.5,"software_cycles":45628,"boot_cycles":62,"total_cycles":46524,"icache_preloaded_lines":9216,"icache_refills":0,"icache_runtime_refills":0,"wall_seconds":923.565545}
+```
+
+The log, `alltoall_32x32_config_check.json`, and
+`alltoall_32x32_verification.json` are under
+`build/arche3d/validation/direct_preheat/`. The configuration audit checks all
+1,024 preload inputs, the single system loader/snapshot, absence of timed-preheat
+components, the production parameters, and unchanged DRAMSys configuration hashes.
+Generated artifacts stay under `build/`; this directory contains only Markdown.
+
+## Initial full software all-to-all benchmark (historical)
+
+The following measurement predates TCDM stacks, the remote-L1/wakeup changes,
+and shared instruction caches. It used separate stack and instruction memories
+and 192-byte synchronization windows. It is retained as an earlier comparison.
 
 The production target instantiates 1,024 SoftHier logic tiles, 6,144 cores,
 1,024 dedicated I3D DMAs, the level-3 Adaptive NCA fat tree, and 1,024 DRAMSys
@@ -188,3 +267,131 @@ The full 1,024-cluster measurements above are from the initial integration;
 that long benchmark was not rerun for this source-ownership change. Local
 isolation logs and the comparison report are under
 `build/arche3d/validation/isolation/`.
+
+## TCDM stacks, remote L1, and multicast wakeup
+
+The current default reserves the top 24 KiB of each cluster's 384-KiB TCDM for
+six 4-KiB stacks. No dedicated stack component or `0x10000000` mapping remains.
+The SDK links data/BSS/heap below `0x5a000`, leaves the stack reservation out of
+loadable ELF segments and BSS initialization, and initializes SP from
+`__stack_end` (`0x60000`) minus the core's slice offset.
+
+There is no separate synchronization memory. Cores access another cluster's
+actual L1 banks through `0x30000000 + cluster_id * 0x60000 + local_offset` on
+the 32-bit sync NoC. Logic DMA accesses use the same addresses on the separate
+data NoC. The special wakeup command is `0x50000000`, outside the full
+`0x30000000`–`0x47ffffff` remote-L1 range. Its X/Y destination bitmaps cover all
+32 coordinates in each dimension. Command completion waits for all selected
+recipients, and early notifications remain pending until software consumes them.
+
+| Check | Result |
+| --- | --- |
+| Production target and test targets build | PASS |
+| `memory`, four clusters (2 × 2) | PASS; all 24 cores check their TCDM stacks; data/BSS initialization, shared L1 access, remote scalar reads/writes and atomic addition checked |
+| `wakeup`, four clusters | PASS; broadcast, selected row/corner, reverse direction, two early notifications, blocked receiver, concurrent senders, empty masks, and remote-data visibility on wakeup |
+| `arche3d_sync_test`, 32 × 32 | PASS; seven phases, 6,149 notifications, 3,079 request responses, 1,321 cycles |
+| `smoke` | PASS; 38 bursts, 19,463 bytes, no pending requests |
+| `queue` | PASS; 513 bursts, 2,101,248 bytes, no pending requests |
+| `alltoall` software rebuild | PASS |
+
+The full-size sync test uses the production NoC with synthetic endpoints,
+not software cores. It exercises destination bit 31, selection excluding the
+sender, 1,024 simultaneous senders converging on one receiver, four concurrent
+broadcasts, remote L1 reads/writes, and router queues of depth 1. It also checks
+that stale collective metadata cannot turn an ordinary L1 request into a
+multicast. The real tile/bank/register behavior is covered separately by the
+four-cluster software tests.
+
+These checks exposed and fixed backpressure handling in the arche3d-local sync
+router: multicast branches now release their input queue correctly, and grants
+return to the actual predecessor instead of the next-hop direction. Multicast
+children also have initialized status, propagate errors to their parent, and
+release array buffers correctly. The changes are confined to arche3d's copies;
+SoftHier, core, engine, and the shared I3D network models are unchanged.
+
+The four-cluster memory and wakeup apps completed in 59,882 and 695 total
+simulated cycles respectively, with no DMA transactions. Their control-register
+barriers separate test phases; the tested remote L1 and notification traffic
+uses the sync NoC. DMA smoke and queue cycle counts match the earlier results.
+
+The preceding stack-layout checks also verified ELF sections, rejected data/BSS
+that would overlap stacks at link time, and rejected invalid stack reservations.
+The full 1,024-cluster all-to-all simulation was not rerun for these memory-map
+changes, so the earlier 45,534.5-cycle measurement remains historical.
+These new checks validate functionality rather than a new RTL timing calibration.
+
+Repeatable commands are in the [fixture guide](../../../../tests/arche3d/README.md).
+Current build/run logs and the verification report are under
+`build/arche3d/validation/remote_l1_wakeup/`; the earlier stack-linker checks are
+under `build/arche3d/validation/l1_sync/`.
+
+## Shared instruction cache and direct initialization
+
+The per-cluster instruction memories and ELF loaders are removed. One system
+loader writes text/rodata and the initial `.data` image into the first DRAM
+stripe. Each cluster has a shared 32-KiB cache with 64-byte lines and six
+independent 256-bit fetch ports. Runtime refills share the 512-bit I3D source
+with DMA; the source adapter arbitrates and assigns unique live AXI IDs.
+
+The original timed-preheat implementation issued cache reads through I3D and
+DRAMSys. Its full 32 × 32 run was stopped after the cycle-60,000 progress marker,
+before any DMA benchmark traffic started. It produced no full-scale throughput
+result. That implementation has been replaced by direct initialization.
+
+At reset release, before any clocked transactions, the boot controller broadcasts
+one ELF-derived snapshot to all caches. Each cache copies line bytes, valid tags,
+and clean/ready state. This consumes zero simulated cycles and produces no
+I3D or DRAMSys requests. The snapshot includes ELF zero-fill and preserves the
+configured initial memory contents in gaps and partial-line padding. It appears
+once in the system configuration, rather than once per cluster.
+
+The single system loader still populates DRAM through I3D, and all cores start
+on the cycle after its final completion. Core 0 in each cluster copies initialized
+data into L1 and clears BSS. RV32 PCs use the `0x80000000` alias of physical
+`0x100000000`. Channels expose 64 KiB with 32-KiB interleaving; the second stripe
+holds application/DMA data. Runtime cache misses and `fence.i` invalidation
+continue to use the normal timed path. Direct preheating represents an already
+warm cache; it excludes the hardware cost of reaching that state.
+
+### Functional checks with direct initialization
+
+| Software check | Clusters | Directly loaded lines | Boot cycles | Total cycles | Runtime refills | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `memory` | 4 | 80 | 125 | 54,783 | 0 | PASS |
+| `alltoall` | 4 | 36 | 62 | 1,107 | 0 | PASS |
+| `icache` | 4 | 2,048 | 3,890 | 74,423 | 48 | PASS |
+
+All three runs report `preheat_mode: direct` and `preheat_cycles: 0`. Their
+`icache_refills` counters equal their runtime-refill counters; direct loads
+are recorded separately as `icache_preloaded_lines`.
+
+`memory` checks initialized data/BSS, all core stacks, and remote L1 access on
+24 real cores. DRAMSys records zero reads. Four-cluster `alltoall` records
+exactly 16 DMA reads and no preheat reads. `icache` puts six functions beyond
+the first 32 KiB and initialized data beyond 64 KiB. All 24 cores execute the
+functions while DMAs transfer data. It passes with 48 actual cache refills,
+516 DMA transactions, and 2,113,536 DMA bytes. Every endpoint in these tests
+finishes with zero pending requests.
+
+The focused `arche3d_icache_test` passes in 406 cycles. A line initialized at a
+nonzero cache index hits immediately without a downstream request. The test
+then checks hits during a 100-cycle refill, victim-tag invalidation, queued
+misses, flush behavior, and rejection of writes and straddling reads. Four
+runtime refills complete, including the refill forced by flush.
+
+An ELF-layout check covers a nonzero entry/cache index, multiple load segments,
+zero-filled segment tails, gaps and partial-line padding, both zero and pattern
+DRAM initialization, and the no-binary hardware-build case.
+
+Build and run through the conventional flow:
+
+```bash
+make cfg=default TARGETS='arche3d arche3d_dma_test arche3d_icache_test' \
+    MODULES="$PWD/pulp/tests/arche3d" build
+make cfg=default app=alltoall arche3d-sw
+```
+
+See the [fixture guide](../../../../tests/arche3d/README.md) for short-test run
+commands. Logs and structured checks are under
+`build/arche3d/validation/direct_preheat/`. The earlier timed-preheat logs remain
+under `build/arche3d/validation/icache/`; they are historical measurements.

@@ -2,7 +2,6 @@
 """SoftHier logic die, I3D interconnect die, and distributed DRAMSys channels."""
 import importlib
 import os
-from pathlib import Path
 import gvsoc.systree as st
 from gvrun.parameter import TargetParameter
 from vp.clock_domain import Clock_domain
@@ -12,6 +11,7 @@ from pulp.chips.arche3d.logic.flex_mesh_noc_v2 import FlexMeshNoCV2
 from pulp.chips.arche3d.arch import load_arch
 from pulp.chips.arche3d.cluster import Arche3dCluster
 from pulp.chips.arche3d.control import Control
+from pulp.chips.arche3d.instructions import ProgramImage, system_loader
 
 
 class Board(st.Component):
@@ -29,11 +29,11 @@ class Board(st.Component):
             raise ValueError('memory_init must be zero or pattern')
         parser.add_argument('--binary', help='arche3d SDK ELF executable')
         args, _ = parser.parse_known_args()
-        binary = str(Path(args.binary).resolve()) if args.binary else None
+        image = ProgramImage(arch, args.binary, initial_pattern=memory_init == 'pattern')
         clock = Clock_domain(self, 'clock', frequency=1_000_000_000)
         chip = st.Component(self, 'chip')
         clock.o_CLOCK(chip.i_CLOCK())
-        control = Control(chip, 'control', arch, progress)
+        control = Control(chip, 'control', arch, progress, image)
         nx, ny = arch.num_cluster_x, arch.num_cluster_y
         network_module = importlib.import_module('pulp.3d_network.interconnect')
         dram_module = importlib.import_module('pulp.3d_network.dramsys_endpoint')
@@ -51,12 +51,13 @@ class Board(st.Component):
             nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding)
         sync_noc = FlexMeshNoC(chip, 'sync_noc', width=4, nb_x_clusters=nx, nb_y_clusters=ny,
             ni_outstanding_reqs=arch.noc2d_outstanding,
-            router_input_queue_size=arch.noc2d_outstanding, atomics=1, collective=1)
+            router_input_queue_size=arch.noc2d_outstanding, atomics=1, collective=1,
+            wakeup_addr=arch.sync_wakeup_addr)
 
         for cluster_id in range(nx * ny):
             x, y = cluster_id % nx, cluster_id // nx
             terminal = x * ny + y  # I3D terminals use x-major indexing.
-            cluster = Arche3dCluster(chip, f'cluster_{cluster_id}', arch, cluster_id, binary,
+            cluster = Arche3dCluster(chip, f'cluster_{cluster_id}', arch, cluster_id, image,
                 check_pattern=memory_init == 'pattern')
             cluster.o_I3D(network.i_INPUT(terminal))
             cluster.o_I3D_ACTIVITY(control.i_ACTIVITY(cluster_id))
@@ -69,12 +70,16 @@ class Board(st.Component):
             narrow.o_MAP(control.i_INPUT(cluster_id), base=arch.soc_register_base,
                 size=arch.soc_register_size, rm_base=True)
             cluster.o_NARROW_SOC(narrow.i_INPUT())
-            control.o_READY(cluster.i_HBM_PRELOAD_DONE())
+            control.o_READY(cluster.i_BOOT_READY())
+            control.o_CACHE_PRELOAD(cluster.i_CACHE_PRELOAD())
+            cluster.o_CACHE_REFILLS(control.i_CACHE_REFILLS(cluster_id))
+            if cluster_id == 0:
+                system_loader(chip, arch, image, control, cluster)
             cluster.o_WIDE_SOC(data_noc.i_CLUSTER_INPUT(x, y))
             data_noc.o_MAP(cluster.i_WIDE_INPUT(),
                 base=arch.cluster_tcdm_remote + cluster_id * arch.cluster_tcdm_size,
                 size=arch.cluster_tcdm_size, x=x+1, y=y+1)
             cluster.o_SYNC_OUTPUT(sync_noc.i_CLUSTER_INPUT(x, y))
-            sync_size = arch.sync_interleave + arch.sync_special_mem
-            sync_noc.o_MAP(cluster.i_SYNC_INPUT(), base=arch.sync_base + cluster_id * sync_size,
-                size=sync_size, x=x+1, y=y+1)
+            sync_noc.o_MAP(cluster.i_SYNC_INPUT(),
+                base=arch.cluster_tcdm_remote + cluster_id * arch.cluster_tcdm_size,
+                size=arch.cluster_tcdm_size, x=x+1, y=y+1)

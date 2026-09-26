@@ -12,8 +12,10 @@ class FlexClusterArch:
         self.cluster_tcdm_base = 0x00000000
         self.cluster_tcdm_size = 0x00060000
         self.cluster_tcdm_remote = 0x30000000
-        self.cluster_stack_base = 0x10000000
-        self.cluster_stack_size = 0x00020000
+        # Reserve 4 KiB per core at the top of the shared TCDM.
+        self.cluster_stack_size = self.num_core_per_cluster * 0x1000
+        self.cluster_stack_base = (self.cluster_tcdm_base + self.cluster_tcdm_size
+                                   - self.cluster_stack_size)
         self.cluster_zomem_base = 0x18000000
         self.cluster_zomem_size = 0x00020000
         self.cluster_reg_base = 0x20000000
@@ -49,15 +51,17 @@ class FlexClusterArch:
 
         self.dram3d_type = 'hbm4-emu-fast.json'
         self.dram3d_start_base = 0x100000000
-        self.dram3d_node_space = 0x8000
+        self.dram3d_node_space = 0x10000
         self.dram3d_node_interleave = 0x8000
 
-        self.instruction_mem_base = 0x80000000
-        self.instruction_mem_size = 0x00010000
+        # RV32 execution alias of the shared program at dram3d_start_base.
+        self.instruction_base = 0x80000000
+        self.icache_size = 0x8000
+        self.icache_line_size = 64
+        self.icache_core_width = 256
         self.soc_register_base = 0x90000000
         self.soc_register_size = 0x00010000
         self.soc_register_eoc = 0x90000000
         self.soc_register_wakeup = 0x90000004
-        self.sync_base = 0x40000000
-        self.sync_interleave = 0x00000080
-        self.sync_special_mem = 0x00000040
+        # Sync NoC carries remote L1 accesses and this multicast wakeup command.
+        self.sync_wakeup_addr = 0x50000000

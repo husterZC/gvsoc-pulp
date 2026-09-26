@@ -60,6 +60,7 @@ private:
     void get_pos_from_queue(int queue, int &pos_x, int &pos_y);
     // Called by other routers to unstall an output queue after an input queue became available
     void unstall_queue(int from_x, int from_y);
+    void pop_input_queue(int queue_index);
 
     // Pointer to top
     FlooNoc *noc;

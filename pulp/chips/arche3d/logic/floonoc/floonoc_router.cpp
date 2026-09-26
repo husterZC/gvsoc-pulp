@@ -120,7 +120,7 @@ void Router::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 {
                     //2.1 No action needed, directly response
                     _this->noc->handle_request_end(req);
-                    queue->pop();
+                    _this->pop_input_queue(queue_index);
                     queue_index += 1; if (queue_index == 5) queue_index = 0;
                     continue;
                 } else
@@ -139,7 +139,7 @@ void Router::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 } else {
                     // Generate Kid Requests Accordingly
                     _this->collective_generate(req, &analyze_result, _this->x, _this->y);
-                    queue->pop();
+                    _this->pop_input_queue(queue_index);
                     queue_index += 1; if (queue_index == 5) queue_index = 0;
                     continue;
                 }
@@ -154,31 +154,7 @@ void Router::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 continue;
             }
 
-            // Since we now know that the request will be propagated, remove it from the queue
-            queue->pop();
-            if (queue->size() == _this->queue_size)
-            {
-                // In case the queue has one more element than possible, it means the output
-                // queue of the sending router is stalled. Unstall it now that we can accept
-                // one more request
-                int pos_x, pos_y;
-                // Get the previous position out of the input queue index
-                _this->get_pos_from_queue(queue_id, pos_x, pos_y);
-
-                if (pos_x == _this->x && pos_y == _this->y)
-                {
-                    // If the queue corresponds to the local one (previous position is same as
-                    // position), it means it was injected by a network interface
-                    NetworkInterface *ni = _this->noc->get_network_interface(_this->x, _this->y);
-                    ni->unstall_queue(_this->x, _this->y);
-                }
-                else
-                {
-                    // Otherwise it comes from a router
-                    Router *router = _this->noc->get_router(pos_x, pos_y);
-                    router->unstall_queue(_this->x, _this->y);
-                }
-            }
+            _this->pop_input_queue(queue_index);
 
             // Now send to the next position
             if (to_x == _this->x && to_y == _this->y)
@@ -265,6 +241,23 @@ void Router::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 
 
 
+void Router::pop_input_queue(int queue_index)
+{
+    auto queue = this->input_queues[queue_index];
+    queue->pop();
+    if (queue->size() == this->queue_size) {
+        // Grant the predecessor of the input we just drained, including when
+        // a multicast branches. The next-hop output direction is unrelated.
+        int x, y;
+        this->get_pos_from_queue(queue_index, x, y);
+        if (x == this->x && y == this->y)
+            this->noc->get_network_interface(x, y)->unstall_queue(this->x, this->y);
+        else
+            this->noc->get_router(x, y)->unstall_queue(this->x, this->y);
+    }
+    this->fsm_event.enqueue();
+}
+
 void Router::send_to_target(vp::IoReq *req, int pos_x, int pos_y)
 {
     vp::IoMaster *target = this->noc->get_target(pos_x, pos_y);
@@ -303,62 +296,6 @@ void Router::send_to_target(vp::IoReq *req, int pos_x, int pos_y)
     }
 }
 
-bool check_target(int cur_x, int cur_y, int src_x, int src_y, int row_mask, int col_mask){
-    bool check_x = (src_x & row_mask) == (cur_x & row_mask);
-    bool check_y = (src_y & col_mask) == (cur_y & col_mask);
-    return check_x & check_y;
-}
-
-bool check_momentum(int momentum, int cur_x, int cur_y, int src_x, int src_y, int dim_x, int dim_y, int row_mask, int col_mask){
-    if (momentum == FlooNoc::MOMENTUM_RIGHT)
-    {
-        for (int i = cur_x + 1; i < dim_x; ++i)
-        {
-            if (check_target(i, cur_y, src_x, src_y, row_mask, col_mask))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    if (momentum == FlooNoc::MOMENTUM_LEFT)
-    {
-        for (int i = cur_x - 1; i >= 0; --i)
-        {
-            if (check_target(i, cur_y, src_x, src_y, row_mask, col_mask))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    if (momentum == FlooNoc::MOMENTUM_UP)
-    {
-        for (int i = cur_y + 1; i < dim_y; ++i)
-        {
-            if (check_target(cur_x, i, src_x, src_y, row_mask, col_mask))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    if (momentum == FlooNoc::MOMENTUM_DOWN)
-    {
-        for (int i = cur_y - 1; i >= 0; --i)
-        {
-            if (check_target(cur_x, i, src_x, src_y, row_mask, col_mask))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-}
-
 const char * get_momentum_name(int momentum){
     if (momentum == FlooNoc::MOMENTUM_RIGHT) return "Right";
     if (momentum == FlooNoc::MOMENTUM_LEFT) return "Left";
@@ -368,52 +305,32 @@ const char * get_momentum_name(int momentum){
     return "Unknow";
 }
 
-void Router::collective_analyze(vp::IoReq * req, std::queue<int> * queue, int router_x, int router_y)
+void Router::collective_analyze(vp::IoReq *req, std::queue<int> *queue,
+                                int router_x, int router_y)
 {
-    int src_x = req->get_int(FlooNoc::REQ_SRC_X) - 1;
-    int src_y = req->get_int(FlooNoc::REQ_SRC_Y) - 1;
-    int cur_x = router_x - 1;
-    int cur_y = router_y - 1;
-    int dim_x = this->noc->dim_x - 2;
-    int dim_y = this->noc->dim_y - 2;
-    int row_m = req->get_int(FlooNoc::REQ_ROW_MASK);
-    int col_m = req->get_int(FlooNoc::REQ_COL_MASK);
-    this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Collective] cur_x: %d, cur_y: %d, dim_x: %d, dim_y: %d\n",cur_x, cur_y, dim_x, dim_y);
-    if (req->get_int(FlooNoc::REQ_MOMENTUM) == FlooNoc::MOMENTUM_ZERO)
-    {
-        if (check_target(cur_x,cur_y,src_x,src_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_ZERO);
-        if (check_momentum(FlooNoc::MOMENTUM_RIGHT,cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_RIGHT);
-        if (check_momentum(FlooNoc::MOMENTUM_LEFT, cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_LEFT);
-        if (check_momentum(FlooNoc::MOMENTUM_UP,   cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_UP);
-        if (check_momentum(FlooNoc::MOMENTUM_DOWN, cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_DOWN);
-    }
+    unsigned x = router_x - 1, y = router_y - 1;
+    uint32_t xs = req->get_int(FlooNoc::REQ_COL_MASK);
+    uint32_t ys = req->get_int(FlooNoc::REQ_ROW_MASK);
+    int direction = req->get_int(FlooNoc::REQ_MOMENTUM);
+    bool selected_x = xs & (1U << x);
+    if (selected_x && (ys & (1U << y))) queue->push(FlooNoc::MOMENTUM_ZERO);
 
-    if (req->get_int(FlooNoc::REQ_MOMENTUM) == FlooNoc::MOMENTUM_RIGHT)
-    {
-        if (check_target(cur_x,cur_y,src_x,src_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_ZERO);
-        if (check_momentum(FlooNoc::MOMENTUM_RIGHT,cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_RIGHT);
-        if (check_momentum(FlooNoc::MOMENTUM_UP,   cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_UP);
-        if (check_momentum(FlooNoc::MOMENTUM_DOWN, cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_DOWN);
+    // A horizontal spine through the source row branches vertically at each
+    // selected column. This also reaches rectangles excluding the source row
+    // and column, without duplicate deliveries or destinations on the borders.
+    bool horizontal = direction == FlooNoc::MOMENTUM_ZERO ||
+        direction == FlooNoc::MOMENTUM_LEFT || direction == FlooNoc::MOMENTUM_RIGHT;
+    if (horizontal && ys) {
+        if (direction != FlooNoc::MOMENTUM_LEFT && (uint64_t(xs) >> (x + 1)))
+            queue->push(FlooNoc::MOMENTUM_RIGHT);
+        if (direction != FlooNoc::MOMENTUM_RIGHT && (xs & ((1ULL << x) - 1)))
+            queue->push(FlooNoc::MOMENTUM_LEFT);
     }
-
-    if (req->get_int(FlooNoc::REQ_MOMENTUM) == FlooNoc::MOMENTUM_LEFT)
-    {
-        if (check_target(cur_x,cur_y,src_x,src_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_ZERO);
-        if (check_momentum(FlooNoc::MOMENTUM_LEFT, cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_LEFT);
-        if (check_momentum(FlooNoc::MOMENTUM_UP,   cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_UP);
-        if (check_momentum(FlooNoc::MOMENTUM_DOWN, cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_DOWN);
-    }
-
-    if (req->get_int(FlooNoc::REQ_MOMENTUM) == FlooNoc::MOMENTUM_UP)
-    {
-        if (check_target(cur_x,cur_y,src_x,src_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_ZERO);
-        if (check_momentum(FlooNoc::MOMENTUM_UP,   cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_UP);
-    }
-
-    if (req->get_int(FlooNoc::REQ_MOMENTUM) == FlooNoc::MOMENTUM_DOWN)
-    {
-        if (check_target(cur_x,cur_y,src_x,src_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_ZERO);
-        if (check_momentum(FlooNoc::MOMENTUM_DOWN, cur_x,cur_y,src_x,src_y,dim_x,dim_y,row_m,col_m)) queue->push(FlooNoc::MOMENTUM_DOWN);
+    if (selected_x) {
+        if ((horizontal || direction == FlooNoc::MOMENTUM_UP) &&
+            (uint64_t(ys) >> (y + 1))) queue->push(FlooNoc::MOMENTUM_UP);
+        if ((horizontal || direction == FlooNoc::MOMENTUM_DOWN) &&
+            (ys & ((1ULL << y) - 1))) queue->push(FlooNoc::MOMENTUM_DOWN);
     }
 }
 
@@ -428,6 +345,7 @@ void Router::collective_generate(vp::IoReq * req, std::queue<int> * queue, int r
         //New request
         vp::IoReq *kid = new vp::IoReq();
         kid->init();
+        kid->status = vp::IO_REQ_OK;
         kid->arg_alloc(FlooNoc::REQ_NB_ARGS);
         *kid->arg_get(FlooNoc::REQ_DEST_NI) = *req->arg_get(FlooNoc::REQ_DEST_NI);
         *kid->arg_get(FlooNoc::REQ_DEST_BURST) = *req->arg_get(FlooNoc::REQ_DEST_BURST);
@@ -533,10 +451,12 @@ void Router::get_pos_from_queue(int queue, int &pos_x, int &pos_y)
 {
     switch (queue)
     {
-        case FlooNoc::DIR_RIGHT: pos_x = this->x+1; pos_y = this->y; break;
-        case FlooNoc::DIR_LEFT: pos_x = this->x-1; pos_y = this->y; break;
-        case FlooNoc::DIR_UP: pos_x = this->x; pos_y = this->y+1; break;
-        case FlooNoc::DIR_DOWN: pos_x = this->x; pos_y = this->y-1; break;
+        // Inverse of get_req_queue: names denote travel direction, so a
+        // right-going input came from the neighbor on the left.
+        case FlooNoc::DIR_RIGHT: pos_x = this->x-1; pos_y = this->y; break;
+        case FlooNoc::DIR_LEFT: pos_x = this->x+1; pos_y = this->y; break;
+        case FlooNoc::DIR_UP: pos_x = this->x; pos_y = this->y-1; break;
+        case FlooNoc::DIR_DOWN: pos_x = this->x; pos_y = this->y+1; break;
         case FlooNoc::DIR_LOCAL: pos_x = this->x; pos_y = this->y; break;
     }
 }
@@ -571,4 +491,3 @@ void Router::reset(bool active)
         this->current_queue = 0;
     }
 }
-

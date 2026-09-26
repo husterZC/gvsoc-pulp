@@ -38,6 +38,8 @@ FlooNoc::FlooNoc(vp::ComponentConf &config)
     this->router_input_queue_size = get_js_config()->get_int("router_input_queue_size");
     this->atomics = get_js_config()->get_int("atomics");
     this->collective = get_js_config()->get_int("collective");
+    this->wakeup_addr = get_js_config()->get_uint("wakeup_addr");
+    this->wakeup_entry = {this->wakeup_addr, 4, 1, 1};
     this->edge_node_alias = get_js_config()->get_int("edge_node_alias");
     this->edge_node_alias_start_bit = get_js_config()->get_int("edge_node_alias_start_bit");
     this->interleave_enable = get_js_config()->get_int("interleave_enable");
@@ -134,7 +136,8 @@ void FlooNoc::handle_request_end(vp::IoReq *req)
     {
         vp::IoReq * parent = *(vp::IoReq **)req->arg_get(FlooNoc::REQ_PARENT);
         process_collective_operations(parent, req);
-        delete req->get_data();
+        if (req->status == vp::IO_REQ_INVALID) parent->status = vp::IO_REQ_INVALID;
+        delete[] req->get_data();
         delete req;
         parent->set_int(FlooNoc::REQ_PEND_KIDS, parent->get_int(FlooNoc::REQ_PEND_KIDS) - 1);
         if (parent->get_int(FlooNoc::REQ_PEND_KIDS) <= 0)
@@ -202,6 +205,8 @@ void FlooNoc::reset(bool active)
 
 Entry *FlooNoc::get_entry(uint64_t base, uint64_t size)
 {
+    if (this->collective && base == this->wakeup_addr && size == 4)
+        return &this->wakeup_entry;
     // For now, we store mapping in a classic array.
     // Just go through each entry one by one, until one is matching the requested memory location
     for (int i=0; i<this->entries.size(); i++)

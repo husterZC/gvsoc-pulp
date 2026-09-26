@@ -16,6 +16,7 @@ porting a future SoftHier change requires an explicit edit and validation here.
 | Path | Models |
 | --- | --- |
 | `cluster_unit.py` | Logic tile, banked L1 composition, and dedicated-DMA attachment |
+| `icache.cpp` | Shared IO_v2 instruction cache adapted from `pulp/snitch/snitch_icache.cpp` |
 | `cluster_registers.*` | Local barriers, boot, and cluster registers |
 | `memory.*`, `cluster/`, `hwpe_interleaver.*` | Memories and L1 arbitration/interleaving |
 | `snitch/` | Core wrappers, XDMA/RedMule/RVV instruction extensions, zero memory, sequencer, and register schema |
@@ -29,3 +30,15 @@ and DRAMSys endpoints are composed by `../system.py` from `pulp/3d_network`.
 
 Build and run through the [arche3d target](../README.md). Model C++ sources are
 registered by the Python components through GVSoC's `add_sources` convention.
+
+The instruction-cache implementation is a source copy of the PULP Snitch cache.
+Its arche3d constructor reads ordinary component properties, supporting both
+compiled platform trees and GVSoC's JSON fallback when the ELF or test geometry
+changes. It uses direct mapping, one demand refill slot, and no speculative
+prefetching. A host-side initialization port copies the ELF entry window into
+cache data and tags at time zero; it generates no IO traffic. The single shared
+snapshot is prepared in `../instructions.py` and broadcast by the boot controller.
+The arche3d copy also serves resident hits during an unrelated refill and
+invalidates the victim before its buffer is refilled. A focused regression
+checks both behaviors, cache flush, and invalid accesses. No change to the
+shared cache or framework is required.

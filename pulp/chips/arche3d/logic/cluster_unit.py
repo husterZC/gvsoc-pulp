@@ -27,37 +27,14 @@ from pulp.chips.arche3d.logic.transpose_engine import TransposeEngine
 from pulp.chips.arche3d.logic.util_dumpper import UtilDumpper
 from pulp.chips.arche3d.logic.snitch.snitch_cluster.dma_interleaver import DmaInterleaver
 from pulp.chips.arche3d.logic.snitch.zero_mem import ZeroMem
-from elftools.elf.elffile import *
 from pulp.chips.arche3d.logic.idma.snitch_dma import SnitchDma
 from pulp.chips.arche3d.logic.cluster.l1_interleaver import L1_interleaver
 import gvsoc.runner
 import math
 from pulp.chips.arche3d.logic.snitch.sequencer import Sequencer
-import utils.loader.loader
 
 
 GAPY_TARGET = True
-
-#Function to get EoC entry
-def find_binary_entry(elf_filename):
-    # Open the ELF file in binary mode
-    with open(elf_filename, 'rb') as f:
-        elffile = ELFFile(f)
-
-        # Find the symbol table section in the ELF file
-        for section in elffile.iter_sections():
-            if isinstance(section, SymbolTableSection):
-                # Iterate over symbols in the symbol table
-                for symbol in section.iter_symbols():
-                    # Check if this symbol's name matches "tohost"
-                    if symbol.name == '_start':
-                        # Return the symbol's address
-                        return symbol['st_value']
-
-    # If the symbol wasn't found, return None
-    return None
-
-
 
 class Area:
 
@@ -69,10 +46,9 @@ class Area:
 
 class ClusterArch:
     def __init__(self,  nb_core_per_cluster, base, cluster_id, tcdm_size,
-                        stack_base,         stack_size,
                         zomem_base,         zomem_size,
                         reg_base,           reg_size,
-                        sync_base,          sync_itlv,          sync_special_mem,
+                        tcdm_remote,        sync_wakeup_addr,
                         insn_base,          insn_size,
                         nb_tcdm_banks,      tcdm_bank_width,
                         redmule_ce_height,  redmule_ce_width,   redmule_ce_pipe,
@@ -91,10 +67,11 @@ class ClusterArch:
         self.cluster_id             = cluster_id
         self.auto_fetch             = auto_fetch
         self.barrier_irq            = 19
-        self.tcdm                   = ClusterArch.Tcdm(base, self.nb_core + len(spatz_core_list)*spatz_num_vlsu, tcdm_size, nb_tcdm_banks, tcdm_bank_width, sync_itlv, sync_special_mem, tech_node)
-        self.stack_area             = Area(stack_base, stack_size)
+        # One additional scalar L1 port is reserved for the synchronization NoC.
+        self.tcdm                   = ClusterArch.Tcdm(base, self.nb_core + len(spatz_core_list)*spatz_num_vlsu + 1, tcdm_size, nb_tcdm_banks, tcdm_bank_width, tech_node)
         self.zomem_area             = Area(zomem_base, zomem_size)
-        self.sync_area              = Area(sync_base, sync_itlv + sync_special_mem)
+        self.remote_tcdm_area       = Area(tcdm_remote, tcdm_size * num_cluster_x * num_cluster_y)
+        self.sync_wakeup_addr       = sync_wakeup_addr
         self.reg_area               = Area(reg_base, reg_size)
         self.insn_area              = Area(insn_base, insn_size)
 
@@ -128,14 +105,12 @@ class ClusterArch:
         self.tech_node              = tech_node
 
     class Tcdm:
-        def __init__(self, base, nb_masters, tcdm_size, nb_tcdm_banks, tcdm_bank_width, sync_itlv, sync_special_mem, tech_node):
+        def __init__(self, base, nb_masters, tcdm_size, nb_tcdm_banks, tcdm_bank_width, tech_node):
             self.area = Area( base, tcdm_size)
             self.nb_tcdm_banks = nb_tcdm_banks
             self.bank_width = tcdm_bank_width
             self.bank_size = (self.area.size / self.nb_tcdm_banks) + self.bank_width #prevent overflow due to RedMule access model
             self.nb_masters = nb_masters
-            self.sync_itlv = sync_itlv
-            self.sync_special_mem = sync_special_mem
             self.tech_node = tech_node
 
 
@@ -161,8 +136,6 @@ class ClusterTcdm(gvsoc.systree.Component):
         hwpe_interleaver = HWPEInterleaver(self, 'hwpe_interleaver', arch.nb_masters,
             nb_banks, arch.bank_width)
 
-        tcdm_sync_mem = memory.Memory(self, 'sync_mem', size=arch.sync_itlv, atomics=True, width_log2=int(math.log2(arch.bank_width)), tech_node=arch.tech_node)
-
         for i in range(0, nb_banks):
             self.bind(interleaver, 'out_%d' % i, banks[i], 'input')
             self.bind(dma_interleaver, 'out_%d' % i, banks[i], 'input')
@@ -175,7 +148,7 @@ class ClusterTcdm(gvsoc.systree.Component):
             self.bind(self, f'bus_input', bus_interleaver, f'input')
             self.bind(self, f'hwpe_input', hwpe_interleaver, f'input')
 
-        self.bind(self, f'sync_input', tcdm_sync_mem, f'input')
+        self.bind(self, 'sync_input', interleaver, f'in_{arch.nb_masters - 1}')
 
     def i_INPUT(self, port: int) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'in_{port}', signature='io')
@@ -196,27 +169,16 @@ class ClusterTcdm(gvsoc.systree.Component):
 
 class ClusterUnit(gvsoc.systree.Component):
 
-    def __init__(self, parent, name, arch, binary, entry=0, auto_fetch=True,
-                 extra_dma_factory=None):
+    def __init__(self, parent, name, arch, entry=0,
+                 extra_dma_factory=None, instruction_cache_factory=None):
         super().__init__(parent, name)
 
         #
         # Components
         #
 
-        #Boot Address
-        boot_addr = 0x8000_0000
-        if binary is not None:
-            boot_addr = find_binary_entry(binary)
-
-        #Loader
-        loader = utils.loader.loader.ElfLoader(self, 'loader', binary=binary)
-
-        #Instruction memory
-        instr_mem = memory.Memory(self, 'instr_mem', size=arch.insn_area.size, atomics=True, width_log2=-1, tech_node=arch.tech_node)
-
-        #Instruction router
-        instr_router = router.Router(self, 'instr_router', bandwidth=8*arch.nb_core)
+        boot_addr = entry
+        self.instruction_cache = instruction_cache_factory(self)
 
         # Main router
         wide_axi_goto_tcdm = router.Router(self, 'wide_axi_goto_tcdm')
@@ -279,7 +241,7 @@ class ClusterUnit(gvsoc.systree.Component):
         # Cluster peripherals
         cluster_registers = ClusterRegisters(self, 'cluster_registers',
             num_cluster_x=arch.num_cluster_x, num_cluster_y=arch.num_cluster_y, nb_cores=arch.nb_core,
-            boot_addr=boot_addr, cluster_id=arch.cluster_id, global_barrier_addr=arch.sync_area.base+arch.tcdm.sync_itlv)
+            boot_addr=boot_addr, cluster_id=arch.cluster_id, sync_wakeup_addr=arch.sync_wakeup_addr)
 
         #data dumpper
         data_dumpper = UtilDumpper(self, 'data_dumpper', arch.cluster_id)
@@ -313,9 +275,6 @@ class ClusterUnit(gvsoc.systree.Component):
                 gather_enable=arch.idma_gather_enable, collective_enable=arch.idma_collective_enable)
             pass
 
-        #stack memory
-        stack_mem = memory.Memory(self, 'stack_mem', size=arch.stack_area.size, tech_node=arch.tech_node)
-
         #zero memory
         zero_mem = ZeroMem(self, 'zero_mem', size=arch.zomem_area.size)
 
@@ -327,14 +286,9 @@ class ClusterUnit(gvsoc.systree.Component):
         # Bindings
         #
 
-        #Binary loader
-        loader.o_OUT(instr_router.i_INPUT())
-        loader.o_START(cluster_registers.i_INST_PREHEAT_DONE())
-        self.o_HBM_PRELOAD_DONE(cluster_registers.i_HBM_PRELOAD_DONE())
-
-        #Instruction router
-        instr_router.o_MAP(narrow_axi.i_INPUT())
-        instr_router.o_MAP(instr_mem.i_INPUT(), base=arch.insn_area.base, size=arch.insn_area.size, rm_base=True)
+        # The system releases all tiles after direct cache initialization and ELF loading.
+        self.itf_bind('boot_ready', cluster_registers.i_BOOT_READY(),
+                      signature='wire<bool>', composite_bind=True)
 
         # Narrow router for cores data accesses
         self.o_NARROW_INPUT(narrow_axi.i_INPUT())
@@ -342,9 +296,6 @@ class ClusterUnit(gvsoc.systree.Component):
         # TODO check on real HW where this should go. This probably go through wide axi to
         # have good bandwidth when transferring from one cluster to another
         narrow_axi.o_MAP(cores_ico[0].i_INPUT(), base=arch.tcdm.area.base, size=arch.tcdm.area.size, rm_base=False)
-
-        #binding to stack memory
-        narrow_axi.o_MAP(stack_mem.i_INPUT(), base=arch.stack_area.base, size=arch.stack_area.size, rm_base=True)
 
         #binding to cluster registers
         narrow_axi.o_MAP(cluster_registers.i_INPUT(), base=arch.reg_area.base, size=arch.reg_area.size, rm_base=True)
@@ -358,11 +309,16 @@ class ClusterUnit(gvsoc.systree.Component):
         #binding to redmule
         narrow_axi.o_MAP(redmule.i_INPUT(), base=arch.redmule_area.base, size=arch.redmule_area.size, rm_base=True)
 
-        #binding back to instruction memory if access needs
-        narrow_axi.o_MAP(instr_mem.i_INPUT(), base=arch.insn_area.base, size=arch.insn_area.size, rm_base=True)
+        # Read-only program/rodata alias, backed by the shared instruction cache.
+        narrow_axi.o_MAP(self.instruction_cache.i_DATA(), base=arch.insn_area.base,
+            size=arch.insn_area.size, rm_base=False)
 
-        #binding to synchronization bus
-        narrow_axi.o_MAP(sync_router_master.i_INPUT(), base=arch.sync_area.base, size=arch.sync_area.size*arch.num_cluster_x*arch.num_cluster_y, rm_base=False)
+        # Scalar remote L1 accesses use the synchronization bus. The special
+        # wakeup address launches a multicast using the cluster's target masks.
+        narrow_axi.o_MAP(sync_router_master.i_INPUT(), base=arch.remote_tcdm_area.base,
+            size=arch.remote_tcdm_area.size, rm_base=False)
+        narrow_axi.o_MAP(cluster_registers.i_WAKEUP_SEND(), name='wakeup_send', base=arch.sync_wakeup_addr,
+            size=4, rm_base=True)
         sync_router_master.o_MAP(self.i_SYNC_OUTPUT())
 
 
@@ -416,7 +372,9 @@ class ClusterUnit(gvsoc.systree.Component):
             cores_ico[core_id].o_MAP(tcdm.i_INPUT(core_id), base=arch.tcdm.area.base,
                 size=arch.tcdm.area.size, rm_base=True)
             cores_ico[core_id].o_MAP(narrow_axi.i_INPUT())
-            cores[core_id].o_FETCH(instr_router.i_INPUT())
+            cores[core_id].o_FETCH(self.instruction_cache.i_FETCH(core_id))
+            cores[core_id].o_FLUSH_CACHE(self.instruction_cache.i_FLUSH())
+            self.instruction_cache.o_FLUSH_ACK(cores[core_id].i_FLUSH_CACHE_ACK())
             if core_id in arch.spatz_core_list:
                 spatz_index = arch.spatz_core_list.index(core_id)
                 for vlsu_port in range(arch.spatz_num_vlsu):
@@ -459,9 +417,10 @@ class ClusterUnit(gvsoc.systree.Component):
 
         #Global Synchronization
         self.o_SYNC_INPUT(sync_router_slave.i_INPUT())
-        sync_router_slave.o_MAP(tcdm.i_SYNC_INPUT())
-        sync_router_slave.o_MAP(cluster_registers.i_GLOBAL_BARRIER_SLAVE(), base=arch.tcdm.sync_itlv, size=arch.tcdm.sync_special_mem, rm_base=True)
-        cluster_registers.o_GLOBAL_BARRIER_MASTER(sync_router_master.i_INPUT())
+        sync_router_slave.o_MAP(tcdm.i_SYNC_INPUT(), base=0, size=arch.tcdm.area.size)
+        sync_router_slave.o_MAP(cluster_registers.i_WAKEUP_RECV(), base=arch.sync_wakeup_addr,
+            size=4, rm_base=True)
+        cluster_registers.o_WAKEUP(sync_router_master.i_INPUT())
 
         # Cluster DMA
         if self.extra_dma is not None:
@@ -529,8 +488,5 @@ class ClusterUnit(gvsoc.systree.Component):
     def o_SYNC_INPUT(self, itf: gvsoc.systree.SlaveItf):
         self.itf_bind('sync_input', itf, signature='io', composite_bind=True)
 
-    def i_HBM_PRELOAD_DONE(self) -> gvsoc.systree.SlaveItf:
-        return gvsoc.systree.SlaveItf(self, 'hbm_preload_done', signature='wire<bool>')
-
-    def o_HBM_PRELOAD_DONE(self, itf: gvsoc.systree.SlaveItf):
-        self.itf_bind('hbm_preload_done', itf, signature='wire<bool>', composite_bind=True)
+    def i_BOOT_READY(self) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(self, 'boot_ready', signature='wire<bool>')
