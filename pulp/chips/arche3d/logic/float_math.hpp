@@ -14,6 +14,7 @@ constexpr flexfloat_desc_t FP16{5, 10};
 constexpr flexfloat_desc_t BF16{8, 7};
 constexpr flexfloat_desc_t E5M2{5, 2};
 constexpr flexfloat_desc_t E4M3{4, 3}; // IEEE-like: includes infinity, not E4M3FN.
+constexpr flexfloat_desc_t FP32{8, 23};
 constexpr flexfloat_desc_t FP64{11, 52};
 
 class RneScope {
@@ -26,7 +27,7 @@ private:
     std::fenv_t saved;
 };
 
-inline flexfloat_t decode(uint16_t bits, flexfloat_desc_t format)
+inline flexfloat_t decode(uint32_t bits, flexfloat_desc_t format)
 {
     flexfloat_t value;
     ff_init(&value, format);
@@ -47,13 +48,15 @@ inline uint16_t canonical_nan(flexfloat_desc_t format)
         | (1u << (format.frac_bits - 1));
 }
 
-inline uint16_t encode(flexfloat_t &value)
+inline uint32_t encode(flexfloat_t &value)
 {
     // FlexFloat may sign-extend narrow negative encodings in its uint64 result.
-    return flexfloat_get_bits(&value) & ((1u << (value.desc.exp_bits + value.desc.frac_bits + 1)) - 1);
+    // Use a 64-bit mask so encoding binary32 never shifts a 32-bit value by 32.
+    const unsigned width = value.desc.exp_bits + value.desc.frac_bits + 1;
+    return flexfloat_get_bits(&value) & ((uint64_t{1} << width) - 1);
 }
 
-inline uint16_t convert(uint16_t bits, flexfloat_desc_t from, flexfloat_desc_t to)
+inline uint32_t convert(uint32_t bits, flexfloat_desc_t from, flexfloat_desc_t to)
 {
     auto source = decode(bits, from);
     flexfloat_t result;
@@ -78,21 +81,21 @@ inline uint16_t maximum(uint16_t a, uint16_t b, flexfloat_desc_t format)
     return encode(result);
 }
 
-inline uint16_t mac_fp16(uint16_t a, uint16_t b, uint16_t accumulator,
-                         flexfloat_desc_t input_format)
+inline uint32_t mac_fp32(uint16_t a, uint16_t b, uint32_t accumulator,
+                        flexfloat_desc_t input_format)
 {
     auto left = decode(a, input_format), right = decode(b, input_format);
-    auto acc = decode(accumulator, FP16);
+    auto acc = decode(accumulator, FP32);
     flexfloat_t wide_left, wide_right, wide_acc, product_sum, result;
     // FlexFloat's FMA takes equally typed operands. Widen exactly to its double
     // backend so BF16 inputs keep their exponent range until the fused result.
-    // The architectural accumulator is ONLY the rounded binary16 bits below.
+    // The architectural accumulator is ONLY the rounded binary32 bits below.
     ff_cast(&wide_left, &left, FP64);
     ff_cast(&wide_right, &right, FP64);
     ff_cast(&wide_acc, &acc, FP64);
     ff_init(&product_sum, FP64);
     ff_fma(&product_sum, &wide_left, &wide_right, &wide_acc);
-    ff_cast(&result, &product_sum, FP16);
+    ff_cast(&result, &product_sum, FP32);
     return encode(result);
 }
 

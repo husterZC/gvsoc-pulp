@@ -282,8 +282,9 @@ sync-NoC wakeup multicast uses 32-bit destination bitmaps for the full grid.
 Scalar Snitch, Spatz, RedMule and data-NoC reductions share GVSoC FlexFloat
 for FP16, BF16, FP8 E5M2 and FP8 E4M3. The data NoC supports sum/max in each
 format with a one-cycle reduction/join stage. RedMule rounds each fused MAC
-to an **FP16 accumulator**, retaining it across internal tiles before output
-conversion. NoC/RedMule use RNE independently of CPU rounding CSRs.
+to an **FP32 accumulator**, retaining its 32-bit state across internal tiles
+before converting once to the selected FP16/BF16/FP8 output format.
+NoC/RedMule use RNE independently of CPU rounding CSRs.
 See [float_math.md](doc/float_math.md) for command encodings, numerical
 semantics, SDK APIs and reproducible cross-unit tests.
 

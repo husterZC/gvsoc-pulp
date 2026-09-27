@@ -17,7 +17,7 @@
 /*
  * Author: Chi     Zhang , ETH Zurich (chizhang@iis.ee.ethz.ch)
  * Note:
- *      Integer GEMM and FP16/BF16/E5M2/E4M3 GEMM with an FP16 accumulator.
+ *      Integer GEMM and FP16/BF16/E5M2/E4M3 GEMM with an FP32 accumulator.
  */
 
 #include <vp/vp.hpp>
@@ -186,8 +186,8 @@ public:
     uint8_t *           x_buffer;
     uint8_t *           z_buffer_compute;
     uint8_t *           z_buffer_previos;
-    // Binary16 state persists across N tiles; output format is applied only once.
-    std::vector<uint16_t> fp16_accumulator;
+    // Binary32 state persists across N tiles; output format is applied only once.
+    std::vector<uint32_t> fp32_accumulator;
 
     //Power
     vp::PowerSource     gemm_tile_energy;
@@ -229,7 +229,7 @@ LightRedmule::LightRedmule(vp::ComponentConf &config)
     this->LOCAL_BUFFER_N    = this->bandwidth / this->elem_size;
     this->LOCAL_BUFFER_W    = this->ce_width * (this->ce_pipe + 1);
 
-    this->fp16_accumulator.resize(this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W);
+    this->fp32_accumulator.resize(this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W);
 
     //Initialize registers
     this->m_size            = 4;
@@ -518,16 +518,16 @@ void LightRedmule::process_float_compute()
         for (unsigned j = 0; j < columns; ++j)
         {
             unsigned index = i * w + j;
-            uint16_t &acc = fp16_accumulator[index];
+            uint32_t &acc = fp32_accumulator[index];
             if (iter_k == 0)
-                acc = convert(load(z_buffer_compute + index * elem_size, elem_size), format, FP16);
+                acc = convert(load(z_buffer_compute + index * elem_size, elem_size), format, FP32);
             // Only actual terms participate. Padded zero MACs could change -0
             // or turn infinity * 0 into NaN at the edge of a matrix tile.
             for (unsigned k = 0; k < terms; ++k)
-                acc = mac_fp16(load(x_buffer + (i * n + k) * elem_size, elem_size),
+                acc = mac_fp32(load(x_buffer + (i * n + k) * elem_size, elem_size),
                     load(w_buffer + (k * w + j) * elem_size, elem_size), acc, format);
             if (iter_k + 1 == x_row_tiles)
-                store(z_buffer_compute + index * elem_size, convert(acc, FP16, format), elem_size);
+                store(z_buffer_compute + index * elem_size, convert(acc, FP32, format), elem_size);
         }
     }
 }

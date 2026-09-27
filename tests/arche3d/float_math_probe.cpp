@@ -4,7 +4,7 @@
 static flexfloat_desc_t format(unsigned index)
 {
     constexpr flexfloat_desc_t formats[] = {arche3d_float::FP16, arche3d_float::BF16,
-        arche3d_float::E5M2, arche3d_float::E4M3};
+        arche3d_float::E5M2, arche3d_float::E4M3, arche3d_float::FP32};
     return formats[index];
 }
 
@@ -22,7 +22,7 @@ extern "C" unsigned pair(unsigned index, unsigned maximum, unsigned a, unsigned 
 extern "C" unsigned mac(unsigned index, unsigned a, unsigned b, unsigned accumulator)
 {
     arche3d_float::RneScope rounding;
-    return arche3d_float::mac_fp16(a, b, accumulator, format(index));
+    return arche3d_float::mac_fp32(a, b, accumulator, format(index));
 }
 
 extern "C" unsigned convert(unsigned source, unsigned destination, unsigned bits)
@@ -39,7 +39,9 @@ extern "C" unsigned environment()
     feclearexcept(FE_ALL_EXCEPT);
     feraiseexcept(FE_DIVBYZERO);
     unsigned rounded = pair(0, 0, 0x3c01, 0x1000); // Odd halfway rounds upward under RNE.
-    bool ok = rounded == 0x3c02 && fegetround() == FE_DOWNWARD &&
+    // An odd FP32 halfway sum must round up under the adapter's RNE scope.
+    unsigned accumulated = mac(0, 0x1000, 0x0800, 0x3f800001); // 2^-11 * 2^-13 + (1 + 2^-23)
+    bool ok = rounded == 0x3c02 && accumulated == 0x3f800002 && fegetround() == FE_DOWNWARD &&
         fetestexcept(FE_ALL_EXCEPT) == FE_DIVBYZERO;
     fesetenv(&saved);
     return ok;

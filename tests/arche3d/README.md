@@ -130,7 +130,8 @@ checks opcode collisions and preservation of existing encodings.
 
 Build `app=fp_alignment` and run on **four tiles**. It compares real scalar,
 Spatz and logic-DMA/NoC sum/max results in all four formats and checks the
-RedMule FP16 accumulator, including internal tile boundaries. The standalone
+RedMule FP32 accumulator, including retained small contributions, BF16 range,
+per-MAC rounding, and internal tile boundaries. The standalone
 `test_float_math.py` provides an independent exact arithmetic oracle.
 See [the arithmetic contract and complete commands](../../pulp/chips/arche3d/doc/float_math.md).
 

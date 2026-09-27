@@ -11,6 +11,7 @@ separate RedMule or NoC float-to-bit conversion implementation.
 | BF16 | 8 | 7 | `0x7f80` | `0x7fc0` |
 | FP8 E5M2 | 5 | 2 | `0x7c` | `0x7e` |
 | FP8 E4M3 | 4 | 3 | `0x78` | `0x7c` |
+| FP32 (RedMule accumulator) | 8 | 23 | `0x7f800000` | `0x7fc00000` |
 
 All formats include signed zeros, subnormals, infinities and NaNs. E4M3 has
 maximum finite magnitude 240 and is **not E4M3FN**. CPU `fmode=0` selects
@@ -69,37 +70,44 @@ The sync bus remains for remote scalar L1 access and wakeup multicast.
 
 ## RedMule accumulation
 
-All floating-point RedMule modes now have an **IEEE binary16 accumulator**:
+All floating-point RedMule modes have an **IEEE binary32 (FP32) accumulator**:
 
-1. Convert the initial Y element to FP16 using RNE.
-2. For each term, fuse `X * W + accumulator` and round the result to FP16.
-3. Keep those 16-bit accumulator bits across internal N-tile boundaries.
+1. Convert the initial Y element to FP32 using RNE.
+2. For each term, fuse `X * W + accumulator` and round the result to FP32.
+3. Keep those 32-bit accumulator bits across internal N-tile boundaries.
 4. Convert to the selected output format only after the final term.
 
-X/W retain their input format's range until the fused result is rounded. For
-example, BF16 `2^20 * 2^-20` produces FP16 1; the operands are not first
-converted to half. BF16 initial Y can overflow or underflow when converted
-to the FP16 accumulator. The numerical contract deliberately does not retain
-an FP32 accumulator. Internal host double values are FlexFloat's arithmetic
-implementation, not architectural accumulator state.
+Finite FP16, BF16, and FP8 inputs and initial Y widen exactly to FP32. In
+particular, BF16 initial values no longer overflow or underflow merely because
+they lie outside FP16's range. A fused MAC can still overflow or underflow in
+FP32, and the final conversion is subject to the output format's range and
+precision. For example, BF16 `max_finite * 2 - max_finite` remains finite even
+though the intermediate product would overflow if rounded separately to FP32.
+
+The adapter uses FlexFloat's host-double arithmetic to evaluate a fused result,
+then stores only the rounded binary32 bits. No extra host-double precision is
+retained between MACs or across tiles. `redmule_elem_size` describes initial
+operand storage width, not accumulator precision; there is no accumulator
+mode switch or change to the software command interface.
 
 | Arithmetic mode | Input/output format | Accumulator |
 | ---: | --- | --- |
-| 3 | FP16 | FP16 |
-| 7 | FP8 E5M2 | FP16 |
-| 8 | BF16 | FP16 |
-| 9 | FP8 E4M3 | FP16 |
+| 3 | FP16 | FP32 |
+| 7 | FP8 E5M2 | FP32 |
+| 8 | BF16 | FP32 |
+| 9 | FP8 E4M3 | FP32 |
 
 Modes 0–7 preserve their encodings. Mode 8 adds BF16 and mode 9 makes E4M3
 available. Integer modes and the model's transfer/timing state machine are
 unchanged. Only valid matrix terms are evaluated; padded entries must not
 introduce zero-times-infinity NaNs or change signed zeros.
 
-For FP16 inputs, a dot product matches the same ordered sequence of scalar
-FP16 FMAs. For BF16/FP8, use the FP16-accumulator reference above: a sequence
-of BF16/FP8 FMAs rounds at a different precision. For example, starting at 1,
-adding `2^-11` twice stays 1 in an FP16 accumulator, while an FP32 accumulator
-retains the contributions.
+For a scalar reference, widen X/W and initial Y to FP32, execute the same
+ordered sequence of FP32 FMAs in RNE, and narrow once at the end. A sequence
+of scalar FP16/BF16/FP8 FMAs or NoC narrow sums has different intermediate
+rounding. For example, starting at 1, adding `2^-11` twice produces
+`1 + 2^-10` at FP16 output; an FP16 accumulator would discard both increments.
+FP32 still rounds every MAC: adding `2^-24` to 1 ties back to 1 under RNE.
 
 The SDK provides synchronous `arche3d_redmule_gemm_{fp16,bf16,e5m2,e4m3}`:
 `Y[m,k] += X[m,n] * W[n,k]`. Buffers are row-major local L1 arrays in the named
@@ -126,34 +134,36 @@ make -C arche3d_sdk lint
 
 The host test uses an independent exact `Fraction` oracle and requires a host
 C/C++ compiler, but no Python packages. It checks all FP8 sum/max operand pairs,
-random FP16/BF16 pairs, all source encodings for conversion into the accumulator,
-and mixed-format fused FP16 MACs. It also tests host environment isolation.
+random FP16/BF16 pairs, all narrow source encodings for conversion into and
+back from the FP32 accumulator, arbitrary FP32-to-narrow output conversions,
+and mixed-format fused FP32 MACs. Exact integer rounding handles the FP32
+reference without enumerating its encoding space. Directed cases cover signed
+zeros, subnormals, infinities, NaNs, and overflow; host rounding/exception
+environment isolation is also checked.
 
 `fp_alignment` runs on four production tiles. Every scalar core computes sum,
 max and FMA references; all configured Spatz cores compare vector results. The
 logic DMA issues real two-participant reductions and compares with the scalar
-results. RedMule tests cover subnormals, fused rounding, BF16 input range,
-FP16-vs-FP32 accumulation, and preservation of FP16 state across internal tiles.
+results. RedMule tests cover subnormals, fused rounding, BF16 input/initial-Y
+range, FP16-vs-FP32 accumulation, per-MAC FP32-vs-host-double rounding, and
+preservation of FP32 state across internal tiles.
 The NoC-only test uses a 4x4 mesh, concurrent sources, shallow queues, delayed
 and denied targets, reordered responses, match masks and invalid alignment.
 
-Validated on 2026-09-27:
+FP32 accumulator validation on 2026-09-27:
 
 | Check | Result |
 | --- | --- |
-| Exact arithmetic oracle | PASS, 685,312 checks |
-| `fp_alignment`, four tiles | PASS, 24 scalar cores and 16 Spatz units; 660,425 cycles |
-| 4x4 data-NoC stress | PASS, 59 jobs, 9,486 target beats, 19,884 cycles |
-| `fp_formats`, `fp_special` | PASS on four tiles |
-| `smoke`, `memory`, `wakeup`, `alltoall` | PASS on four tiles |
-| `reject_collective` | Expected failure on the I3D DMA |
+| Exact arithmetic oracle | PASS, 914,372 checks |
+| Production `arche3d` and `arche3d_dma_test` builds | PASS |
+| `fp_alignment`, four tiles | PASS, 24 scalar cores and 16 Spatz units; 756,238 cycles |
 | SDK formatting and lint | PASS |
 
 The cross-unit software test includes 147,456 scalar reference operations,
-98,304 scalar/vector comparisons, 16,256 scalar/NoC comparisons and 64 RedMule
+98,304 scalar/vector comparisons, 16,256 scalar/NoC comparisons and 104 RedMule
 GEMMs across four tiles. RedMule cases also cross M/K tile boundaries and use
 incomplete edge tiles. NoC/RedMule commands are tested with deliberately
 mismatched CPU format and rounding CSRs. Logs and machine-readable results
-are saved under `build/arche3d/validation/fp_alignment/` (not tracked).
+are saved under `build/arche3d/validation/fp32_accumulator/` (not tracked).
 These are numerical/functional checks; the full 32x32 all-to-all benchmark
 was not rerun for this arithmetic change.
