@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <cstring>
 #include "noc_bridge.hpp"
+#include "floonoc_v2/collective_types.hpp"
 
 class NocBridgeLegacy : public vp::Component
 {
@@ -61,10 +62,10 @@ vp::IoReqStatus NocBridgeLegacy::input(vp::Block *block, vp::IoReq *req)
     auto *origin = new Origin{req, {req->get_addr(), req->get_size(),
         req->get_data(), req->get_is_write(), false, req->get_full_latency(), nullptr}};
     origin->access.owner = origin;
-    // Preserve the legacy payload ABI: only operation codes 1..7 denote a
+    // Preserve the legacy payload ABI: only known operation codes denote a
     // collective. Ordinary masters are not required to set any other bytes.
     uint8_t type = req->get_payload()[0];
-    origin->access.collective.type = type >= 1 && type <= 7 ? type : 0;
+    origin->access.collective.type = arche3d_collective::valid(type) ? type : 0;
     origin->access.collective.row_mask = req->get_payload()[1];
     origin->access.collective.col_mask = req->get_payload()[2];
     // The v2 face dispatches on a clock event, after this PENDING returns.

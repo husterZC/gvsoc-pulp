@@ -212,7 +212,8 @@ class ClusterUnit(gvsoc.systree.Component):
                     fetch_enable=arch.auto_fetch, boot_addr=boot_addr,
                     core_id=core_id, htif=False, inc_spatz=core_has_spatz,
                     spatz_nb_lanes=arch.spatz_num_vlsu,
-                    spatz_lane_width=arch.spatz_vlsu_bw,
+                    # The VLSU/compute model takes bytes; the architecture and VLEN use bits.
+                    spatz_lane_width=arch.spatz_vlsu_bw // 8,
                     vlen=arch.spatz_num_vlsu * arch.spatz_vlsu_bw,
                     ssr=True, sequencer=True))
             else:

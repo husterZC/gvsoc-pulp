@@ -21,6 +21,7 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io_v2.hpp>
 #include "floonoc_v2.hpp"
+#include "collective_types.hpp"
 #include "floonoc_network_interface_v2.hpp"
 
 SoftHierNetworkQueueV2::SoftHierNetworkQueueV2(SoftHierNetworkInterfaceV2 &ni, std::string name, uint64_t width, int nw)
@@ -670,11 +671,12 @@ vp::IoReqStatus SoftHierNetworkInterfaceV2::handle_req(vp::IoReq *req, bool wide
         // SDK collectives address the initiating cluster's remote L1 window;
         // all participants access the same translated local offset. Never
         // interpret a collective as a multicast HBM operation.
-        mapped = mapped && collective.type <= 7 && entry && entry->x == this->x
+        unsigned element_bytes = arche3d_collective::element_bytes(collective.type);
+        mapped = mapped && arche3d_collective::valid(collective.type) && entry && entry->x == this->x
             && entry->y == this->y && size <= this->wide_width
             && size <= entry->size - (addr - entry->base)
             && (collective.type == 1 ? req->get_opcode() == vp::WRITE :
-                (req->get_opcode() == vp::READ && !(addr & 1) && !(size & 1)));
+                (req->get_opcode() == vp::READ && addr % element_bytes == 0 && size % element_bytes == 0));
     }
     if (!mapped)
     {

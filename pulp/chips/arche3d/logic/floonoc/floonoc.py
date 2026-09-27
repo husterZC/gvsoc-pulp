@@ -53,7 +53,7 @@ class FlooNoc2dMesh(gvsoc.systree.Component):
         super(FlooNoc2dMesh, self).__init__(parent, name)
 
         self.add_sources([
-            'pulp/chips/arche3d/logic/floonoc/floonoc.cpp',
+            'cpu/iss/flexfloat/flexfloat.c', 'pulp/chips/arche3d/logic/floonoc/floonoc.cpp',
             'pulp/chips/arche3d/logic/floonoc/floonoc_router.cpp',
             'pulp/chips/arche3d/logic/floonoc/floonoc_network_interface.cpp',
         ])

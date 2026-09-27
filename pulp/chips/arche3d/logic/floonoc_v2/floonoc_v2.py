@@ -58,7 +58,7 @@ class FloonocRouterV2(gvsoc.systree.Component):
             dim_x: int, dim_y: int, queue_size: int):
         super().__init__(parent, name)
 
-        self.add_sources(['pulp/chips/arche3d/logic/floonoc_v2/floonoc_router_v2.cpp'])
+        self.add_sources(['cpu/iss/flexfloat/flexfloat.c', 'pulp/chips/arche3d/logic/floonoc_v2/floonoc_router_v2.cpp'])
 
         self.add_property('x', x)
         self.add_property('y', y)

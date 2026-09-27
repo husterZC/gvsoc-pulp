@@ -157,6 +157,40 @@ use `x * num_cluster_y + y`. The SDK provides both IDs and
 interleaving. 64-bit DMA addresses reach DRAM above the RV32 scalar address
 space. The scalar remote-L1 range and wakeup command do not overlap.
 
+## Scalar and vector floating-point formats
+
+Each core's existing `fmode` CSR at **`0x800`** also controls its attached Spatz.
+The register resets to 0; other cores have independent format state.
+
+| `fmode` | Scalar / vector FP16 | Scalar / vector FP8 |
+| --- | --- | --- |
+| 0 | IEEE half, E5M10 | E5M2 |
+| 3 | BF16, E8M7 | E4M3 |
+
+Vector instruction encodings and SEW remain unchanged. At SEW=16, `vfadd.vv`
+performs FP16 or BF16 addition; at SEW=8 it performs E5M2 or E4M3 addition.
+FP32/FP64, integer operations, and raw register/load/store bit layouts keep
+their existing behavior. Widening/narrowing chooses the active format at both
+operand widths. E4M3 uses the scalar model's IEEE-like infinity/NaN encoding
+(maximum finite magnitude 240), rather than the finite-only E4M3FN encoding.
+
+Writing `fmode` waits for queued vector work to finish before changing formats.
+It preserves vector-register contents, VL and VTYPE, takes effect without
+another `vsetvli`, and persists across later SEW changes. The SDK exposes this
+as `arche3d_fp_format_set()` and `arche3d_fp_format_get()`.
+
+The CSR handling stays in arche3d's local core model. The shared RVV helper's
+`CONFIG_GVSOC_ISS_VECTOR_FMODE` opt-in is enabled only for arche3d Spatz cores;
+other targets retain their existing format mapping. See the
+[software fixture](../../../tests/arche3d/README.md#floating-point-format-regression)
+for the executable regression.
+
+Both scalar and vector cores support **exp, sin, cos, sqrt and reciprocal**
+in all four narrow formats. The new functions use arche3d custom instructions
+and SDK helpers; existing sqrt and legacy vector-exp encodings are retained.
+See [special functions](doc/special_functions.md) for APIs, encodings,
+rounding/exception behavior, timing assumptions and regression commands.
+
 ## Instruction cache and boot
 
 Each cluster has one **32-KiB shared instruction cache**, reusing the existing
@@ -240,6 +274,16 @@ Collective operations are rejected with a fatal diagnostic before entering I3D.
 The logic-die DMA retains its existing collective capability and interfaces.
 Its inherited DMA collective row/column masks remain 16 bits. The separate
 sync-NoC wakeup multicast uses 32-bit destination bitmaps for the full grid.
+
+## Shared floating-point arithmetic
+
+Scalar Snitch, Spatz, RedMule and data-NoC reductions share GVSoC FlexFloat
+for FP16, BF16, FP8 E5M2 and FP8 E4M3. The data NoC supports sum/max in each
+format with a one-cycle reduction/join stage. RedMule rounds each fused MAC
+to an **FP16 accumulator**, retaining it across internal tiles before output
+conversion. NoC/RedMule use RNE independently of CPU rounding CSRs.
+See [float_math.md](doc/float_math.md) for command encodings, numerical
+semantics, SDK APIs and reproducible cross-unit tests.
 
 ## Software and benchmark
 

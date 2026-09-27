@@ -22,6 +22,7 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 #include "floonoc.hpp"
+#include "../floonoc_v2/collective_reduction.hpp"
 #include "floonoc_router.hpp"
 #include "floonoc_network_interface.hpp"
 
@@ -228,113 +229,8 @@ extern "C" vp::Component *gv_new(vp::ComponentConf &config)
 }
 
 
-/****************************************************
-*                   FP16 Utilities                  *
-****************************************************/
-
-typedef union {
-    float f;
-    struct {
-        uint32_t mantissa : 23;
-        uint32_t exponent : 8;
-        uint32_t sign : 1;
-    } parts;
-} FloatBits;
-
-typedef uint16_t fp16;
-
-// Convert float to FP16 (half-precision)
-fp16 float_to_fp16(float value) {
-    FloatBits floatBits;
-    floatBits.f = value;
-
-    uint16_t sign = floatBits.parts.sign << 15;
-    int32_t exponent = floatBits.parts.exponent - 127 + 15; // adjust bias from 127 to 15
-    uint32_t mantissa = floatBits.parts.mantissa >> 13;     // reduce to 10 bits
-
-    if (exponent <= 0) {
-        if (exponent < -10) return sign;   // too small
-        mantissa = (floatBits.parts.mantissa | 0x800000) >> (1 - exponent);
-        return sign | mantissa;
-    } else if (exponent >= 0x1F) {
-        return sign | 0x7C00;  // overflow to infinity
-    }
-    return sign | (exponent << 10) | mantissa;
-}
-
-// Convert FP16 to float
-float fp16_to_float(fp16 value) {
-    FloatBits floatBits;
-    floatBits.parts.sign = (value >> 15) & 0x1;
-    int32_t exponent = (value >> 10) & 0x1F;
-    floatBits.parts.exponent = (exponent == 0) ? 0 : exponent + 127 - 15;
-    floatBits.parts.mantissa = (value & 0x3FF) << 13;
-    return floatBits.f;
-}
-
 void process_collective_operations(vp::IoReq *parent, vp::IoReq *req)
 {
-    int collective_type = parent->get_int(FlooNoc::REQ_COLL_TYPE);
-
-    if (collective_type == 1)
-    {
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[BroadCast]\n");
-
-    } else if (collective_type == 2){
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Reduction ADD UINT16]\n");
-        //Execute reduction
-        uint16_t * dst = (uint16_t *) parent->get_data();
-        uint16_t * src = (uint16_t *) req->get_data();
-        for (int i = 0; i < (req->get_size()/sizeof(uint16_t)); ++i)
-        {
-            dst[i] = dst[i] + src[i];
-        }
-    } else if (collective_type == 3){
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Reduction ADD INT16]\n");
-        //Execute reduction
-        int16_t * dst = (int16_t *) parent->get_data();
-        int16_t * src = (int16_t *) req->get_data();
-        for (int i = 0; i < (req->get_size()/sizeof(int16_t)); ++i)
-        {
-            dst[i] = dst[i] + src[i];
-        }
-    } else if (collective_type == 4){
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Reduction ADD FP16]\n");
-        //Execute reduction
-        fp16 * dst = (fp16 *) parent->get_data();
-        fp16 * src = (fp16 *) req->get_data();
-        for (int i = 0; i < (req->get_size()/sizeof(fp16)); ++i)
-        {
-            dst[i] = float_to_fp16(fp16_to_float(dst[i]) + fp16_to_float(src[i]));
-        }
-    } else if (collective_type == 5){
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Reduction MAX UINT16]\n");
-        //Execute reduction
-        uint16_t * dst = (uint16_t *) parent->get_data();
-        uint16_t * src = (uint16_t *) req->get_data();
-        for (int i = 0; i < (req->get_size()/sizeof(uint16_t)); ++i)
-        {
-            dst[i] = dst[i] > src[i] ? dst[i] : src[i];
-        }
-    } else if (collective_type == 6){
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Reduction MAX INT16]\n");
-        //Execute reduction
-        int16_t * dst = (int16_t *) parent->get_data();
-        int16_t * src = (int16_t *) req->get_data();
-        for (int i = 0; i < (req->get_size()/sizeof(int16_t)); ++i)
-        {
-            dst[i] = dst[i] > src[i] ? dst[i] : src[i];
-        }
-    } else if (collective_type == 7){
-        // this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Reduction MAX FP16]\n");
-        //Execute reduction
-        fp16 * dst = (fp16 *) parent->get_data();
-        fp16 * src = (fp16 *) req->get_data();
-        for (int i = 0; i < (req->get_size()/sizeof(fp16)); ++i)
-        {
-            dst[i] = float_to_fp16(fp16_to_float(dst[i]) > fp16_to_float(src[i]) ? fp16_to_float(dst[i]) : fp16_to_float(src[i]));
-        }
-    } else {
-        // this->trace.fatal("Invalid collective operation: %d\n", collective_type);
-    }
+    arche3d_collective::combine(parent->get_int(FlooNoc::REQ_COLL_TYPE),
+        parent->get_data(), req->get_data(), req->get_size());
 }

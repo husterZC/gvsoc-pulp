@@ -227,7 +227,7 @@ void SoftHierRouterV2::collective_reply(SoftHierFloonocReqV2 *req)
     if (--join->pending) return;
     auto *result = join->request;
     bool seeded = false, error = false;
-    // Fixed tree order makes FP16 rounding independent of target latency.
+    // Fixed tree order makes floating-point rounding independent of target latency.
     for (int slot : {DIR_LOCAL, DIR_RIGHT, DIR_LEFT, DIR_UP, DIR_DOWN})
     {
         auto *reply = join->replies[slot];
@@ -244,7 +244,7 @@ void SoftHierRouterV2::collective_reply(SoftHierFloonocReqV2 *req)
                 seeded = true;
             }
             else if (reply->get_data())
-                softhier_collective::combine(result->collective.type, result->get_data(), reply->get_data(), result->get_size());
+                arche3d_collective::combine(result->collective.type, result->get_data(), reply->get_data(), result->get_size());
         }
         SoftHierFloonocReqV2Allocator::get()->free(reply);
     }
@@ -259,7 +259,7 @@ void SoftHierRouterV2::collective_reply(SoftHierFloonocReqV2 *req)
         result, x, y, result->dest_x, result->dest_y, result->collective.type,
         result->get_size(), result->get_is_write());
     // One pipeline cycle for the join. The result then uses normal arbitration.
-    this->collective_ready.push_back(result, 1);
+    this->collective_ready.push_back(result, arche3d_collective::REDUCTION_CYCLES);
 }
 
 void SoftHierRouterV2::get_next_router_pos(int dest_x, int dest_y, int &next_x, int &next_y)

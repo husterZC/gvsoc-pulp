@@ -17,7 +17,7 @@
 /*
  * Author: Chi     Zhang , ETH Zurich (chizhang@iis.ee.ethz.ch)
  * Note:
- *      Here we only support (No Compute/ INT16 / UINT16 / FP16 ) for matrix multiply
+ *      Integer GEMM and FP16/BF16/E5M2/E4M3 GEMM with an FP16 accumulator.
  */
 
 #include <vp/vp.hpp>
@@ -35,23 +35,11 @@
 #include <stdio.h>
 #include <math.h>
 #include <cpu/iss/include/offload.hpp>
+#include "float_math.hpp"
 
 /****************************************************
 *                   Type Definition                 *
 ****************************************************/
-
-typedef union {
-    float f;
-    struct {
-        uint32_t mantissa : 23;
-        uint32_t exponent : 8;
-        uint32_t sign : 1;
-    } parts;
-} FloatBits;
-
-typedef uint8_t  fp8e4m3;
-typedef uint8_t  fp8e5m2;
-typedef uint16_t fp16;
 
 enum redmule_state {
     IDLE,
@@ -77,11 +65,8 @@ enum iter_instruction {
 
 void matmul_uint16(uint16_t * z, uint16_t * y, uint16_t * x, uint16_t * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
 void matmul_int16(int16_t * z, int16_t * y, int16_t * x, int16_t * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
-void matmul_fp16(fp16 * z, fp16 * y, fp16 * x, fp16 * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
 void matmul_uint8(uint8_t * z, uint8_t * y, uint8_t * x, uint8_t * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
 void matmul_int8(int8_t * z, int8_t * y, int8_t * x, int8_t * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
-void matmul_fp8e4m3(fp8e4m3 * z, fp8e4m3 * y, fp8e4m3 * x, fp8e4m3 * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
-void matmul_fp8e5m2(fp8e5m2 * z, fp8e5m2 * y, fp8e5m2 * x, fp8e5m2 * w, uint16_t m_size, uint16_t n_size, uint16_t k_size);
 
 /*****************************************************
 *                   Class Definition                 *
@@ -114,6 +99,7 @@ public:
     uint32_t get_routine_to_storing_latency();
     void     process_iter_instruction();
     void     process_compute();
+    void     process_float_compute();
 
     vp::Trace           trace;
     vp::IoSlave         input_itf;
@@ -200,6 +186,8 @@ public:
     uint8_t *           x_buffer;
     uint8_t *           z_buffer_compute;
     uint8_t *           z_buffer_previos;
+    // Binary16 state persists across N tiles; output format is applied only once.
+    std::vector<uint16_t> fp16_accumulator;
 
     //Power
     vp::PowerSource     gemm_tile_energy;
@@ -240,6 +228,8 @@ LightRedmule::LightRedmule(vp::ComponentConf &config)
     this->LOCAL_BUFFER_H    = this->ce_height;
     this->LOCAL_BUFFER_N    = this->bandwidth / this->elem_size;
     this->LOCAL_BUFFER_W    = this->ce_width * (this->ce_pipe + 1);
+
+    this->fp16_accumulator.resize(this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W);
 
     //Initialize registers
     this->m_size            = 4;
@@ -285,11 +275,11 @@ LightRedmule::LightRedmule(vp::ComponentConf &config)
 
     //Initialize Buffers
     this->access_buffer     = new uint8_t[this->bandwidth * 2];
-    this->y_buffer_preload  = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W * this->elem_size];
+    this->y_buffer_preload  = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W * 2];
     this->w_buffer          = new uint8_t [this->LOCAL_BUFFER_N * this->LOCAL_BUFFER_W * this->elem_size];
     this->x_buffer          = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_N * this->elem_size];
-    this->z_buffer_compute  = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W * this->elem_size];
-    this->z_buffer_previos  = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W * this->elem_size];
+    this->z_buffer_compute  = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W * 2];
+    this->z_buffer_previos  = new uint8_t [this->LOCAL_BUFFER_H * this->LOCAL_BUFFER_W * 2];
 
     //Initialize FSM
     this->state.set(IDLE);
@@ -485,17 +475,6 @@ void LightRedmule::process_compute(){
                         (uint16_t)buffer_h,
                         (uint16_t)buffer_n,
                         (uint16_t)buffer_w);
-    } else
-    if (this->compute_able == 3)
-    {
-        //FP16
-        matmul_fp16(    (fp16 *)this->z_buffer_compute,
-                        (fp16 *)this->z_buffer_compute,
-                        (fp16 *)this->x_buffer,
-                        (fp16 *)this->w_buffer,
-                        (uint16_t)buffer_h,
-                        (uint16_t)buffer_n,
-                        (uint16_t)buffer_w);
     }
     if (this->compute_able == 5)
     {
@@ -519,18 +498,38 @@ void LightRedmule::process_compute(){
                         (uint16_t)buffer_n,
                         (uint16_t)buffer_w);
     }
-    if (this->compute_able == 7)
-    {
-        //FP8
-        matmul_fp8e5m2( (fp8e5m2 *)this->z_buffer_compute,
-                        (fp8e5m2 *)this->z_buffer_compute,
-                        (fp8e5m2 *)this->x_buffer,
-                        (fp8e5m2 *)this->w_buffer,
-                        (uint16_t)buffer_h,
-                        (uint16_t)buffer_n,
-                        (uint16_t)buffer_w);
-    }
+    if (this->compute_able == 3 || this->compute_able == 7 ||
+        this->compute_able == 8 || this->compute_able == 9)
+        this->process_float_compute();
+}
 
+void LightRedmule::process_float_compute()
+{
+    using namespace arche3d_float;
+    RneScope rounding;
+    const auto format = compute_able == 3 ? FP16 : compute_able == 7 ? E5M2 :
+        compute_able == 8 ? BF16 : E4M3;
+    const unsigned h = ce_height, w = ce_width * (ce_pipe + 1), n = bandwidth / elem_size;
+    const unsigned rows = std::min(h, m_size - iter_i * h);
+    const unsigned columns = std::min(w, k_size - iter_j * w);
+    const unsigned terms = std::min(n, n_size - iter_k * n);
+    for (unsigned i = 0; i < rows; ++i)
+    {
+        for (unsigned j = 0; j < columns; ++j)
+        {
+            unsigned index = i * w + j;
+            uint16_t &acc = fp16_accumulator[index];
+            if (iter_k == 0)
+                acc = convert(load(z_buffer_compute + index * elem_size, elem_size), format, FP16);
+            // Only actual terms participate. Padded zero MACs could change -0
+            // or turn infinity * 0 into NaN at the edge of a matrix tile.
+            for (unsigned k = 0; k < terms; ++k)
+                acc = mac_fp16(load(x_buffer + (i * n + k) * elem_size, elem_size),
+                    load(w_buffer + (k * w + j) * elem_size, elem_size), acc, format);
+            if (iter_k + 1 == x_row_tiles)
+                store(z_buffer_compute + index * elem_size, convert(acc, FP16, format), elem_size);
+        }
+    }
 }
 
 void LightRedmule::process_iter_instruction(){
@@ -805,7 +804,9 @@ void LightRedmule::offload_sync(vp::Block *__this, IssOffloadInsn<uint32_t> *ins
             _this->y_addr = insn->arg_c;
             _this->z_addr = _this->y_addr;
             _this->compute_able = insn->arg_d;
-            _this->elem_size = (_this->compute_able < 4) ? 2 : 1;
+            if (_this->compute_able > 9)
+                _this->trace.fatal("[LightRedmule] Unsupported arithmetic mode %u\n", _this->compute_able);
+            _this->elem_size = (_this->compute_able < 4 || _this->compute_able == 8) ? 2 : 1;
             _this->trace.msg(vp::Trace::LEVEL_TRACE, "[LightRedmule] Set XWY addr: %d, %d, %d)\n",
                 _this->x_addr, _this->w_addr, _this->y_addr);
 
@@ -863,7 +864,9 @@ vp::IoReqStatus LightRedmule::core_acc_req(vp::Block *__this, vp::IoReq *req)
             _this->y_addr = xwy_list_array[2];
             _this->z_addr = _this->y_addr;
             _this->compute_able = xwy_list_array[3];
-            _this->elem_size = (_this->compute_able < 4)? 2:1;
+            if (_this->compute_able > 9)
+                _this->trace.fatal("[LightRedmule] Unsupported arithmetic mode %u\n", _this->compute_able);
+            _this->elem_size = (_this->compute_able < 4 || _this->compute_able == 8) ? 2 : 1;
             _this->trace.msg(vp::Trace::LEVEL_TRACE,"[LightRedmule] Set XWY addr: %d, %d, %d)\n", _this->x_addr, _this->w_addr, _this->y_addr);
 
             /*************************
@@ -1309,59 +1312,6 @@ void matmul_int16(int16_t * z, int16_t * y, int16_t * x, int16_t * w, uint16_t m
 }
 
 
-// Convert float to FP16 (half-precision)
-fp16 float_to_fp16(float value) {
-    FloatBits floatBits;
-    floatBits.f = value;
-
-    uint16_t sign = floatBits.parts.sign << 15;
-    int32_t exponent = floatBits.parts.exponent - 127 + 15; // adjust bias from 127 to 15
-    uint32_t mantissa = floatBits.parts.mantissa >> 13;     // reduce to 10 bits
-
-    if (exponent <= 0) {
-        if (exponent < -10) return sign;   // too small
-        mantissa = (floatBits.parts.mantissa | 0x800000) >> (1 - exponent);
-        return sign | mantissa;
-    } else if (exponent >= 0x1F) {
-        return sign | 0x7C00;  // overflow to infinity
-    }
-    return sign | (exponent << 10) | mantissa;
-}
-
-// Convert FP16 to float
-float fp16_to_float(fp16 value) {
-    FloatBits floatBits;
-    floatBits.parts.sign = (value >> 15) & 0x1;
-    int32_t exponent = (value >> 10) & 0x1F;
-    floatBits.parts.exponent = (exponent == 0) ? 0 : exponent + 127 - 15;
-    floatBits.parts.mantissa = (value & 0x3FF) << 13;
-    return floatBits.f;
-}
-
-// Fused multiply-add for FP16
-float fp16_fma(fp16 a, fp16 b, float c) {
-    float fa = fp16_to_float(a);
-    float fb = fp16_to_float(b);
-    float result = (fa * fb) + c;
-    return result;
-}
-
-void matmul_fp16(fp16 * z, fp16 * y, fp16 * x, fp16 * w, uint16_t m_size, uint16_t n_size, uint16_t k_size){
-    for (int i = 0; i < m_size; ++i)
-    {
-        for (int j = 0; j < k_size; ++j)
-        {
-            float acc = fp16_to_float(y[i * k_size + j]);
-            for (int k = 0; k < n_size; ++k)
-            {
-                acc = fp16_fma(x[i * n_size + k], w[k * k_size + j], acc);
-            }
-            z[i * k_size + j] = float_to_fp16(acc);
-        }
-    }
-}
-
-
 void matmul_uint8(uint8_t * z, uint8_t * y, uint8_t * x, uint8_t * w, uint16_t m_size, uint16_t n_size, uint16_t k_size){
     for (int i = 0; i < m_size; ++i)
     {
@@ -1386,163 +1336,6 @@ void matmul_int8(int8_t * z, int8_t * y, int8_t * x, int8_t * w, uint16_t m_size
             {
                 z[i * k_size + j] += x[i * n_size + k] * w[k * k_size + j];
             }
-        }
-    }
-}
-
-// Constants for FP8-E4M3 format
-#define FP8_EXP_MASK  0x78  // 0111 1000
-#define FP8_FRAC_MASK 0x07  // 0000 0111
-#define FP8_SIGN_MASK 0x80  // 1000 0000
-#define FP8_BIAS      7
-
-// Convert FP8 (E4M3) to float
-float fp8e4m3_to_float(fp8e4m3 value) {
-    uint8_t sign = (value & FP8_SIGN_MASK) >> 7;
-    uint8_t exponent = (value & FP8_EXP_MASK) >> 3;
-    uint8_t fraction = value & FP8_FRAC_MASK;
-
-    if (exponent == 0) {
-        // Subnormal number
-        if (fraction == 0) return sign ? -0.0f : 0.0f;
-        return (sign ? -1.0f : 1.0f) * (fraction / 8.0f) * powf(2, -6);
-    } else if (exponent == 15) {
-        // Infinity or NaN
-        return fraction ? NAN : (sign ? -INFINITY : INFINITY);
-    }
-
-    // Normalized number
-    float mantissa = 1.0f + (fraction / 8.0f);
-    float result = mantissa * powf(2, exponent - FP8_BIAS);
-    return sign ? -result : result;
-}
-
-// Convert float to FP8 (E4M3)
-fp8e4m3 float_to_fp8e4m3(float value) {
-    if (isnan(value)) return 0x7F;  // NaN representation
-    if (isinf(value)) return value < 0 ? 0xF8 : 0x78;  // +/-Inf representation
-
-    uint8_t sign = (value < 0) ? 0x80 : 0x00;
-    value = fabsf(value);
-
-    int exponent;
-    float mantissa = frexpf(value, &exponent);
-
-    if (value == 0.0f) return 0;  // Zero representation
-
-    exponent += FP8_BIAS - 1;
-
-    if (exponent < 1) {
-        // Subnormal handling
-        int frac = (int)roundf(value / powf(2, -6) * 8.0f);
-        return sign | (frac & FP8_FRAC_MASK);
-    } else if (exponent > 14) {
-        // Clamp to infinity
-        return sign | 0x78;
-    }
-
-    // Normal number
-    uint8_t frac = (uint8_t)roundf((mantissa - 0.5f) * 16.0f);
-    return sign | ((exponent << 3) & FP8_EXP_MASK) | (frac & FP8_FRAC_MASK);
-}
-
-// Fused Multiply-Add for FP8
-float fp8e4m3_fma(fp8e4m3 a, fp8e4m3 b, float c) {
-    float fa = fp8e4m3_to_float(a);
-    float fb = fp8e4m3_to_float(b);
-    float result = fa * fb + c;
-    return result;
-}
-
-void matmul_fp8e4m3(fp8e4m3 * z, fp8e4m3 * y, fp8e4m3 * x, fp8e4m3 * w, uint16_t m_size, uint16_t n_size, uint16_t k_size){
-    for (int i = 0; i < m_size; ++i)
-    {
-        for (int j = 0; j < k_size; ++j)
-        {
-            float acc = fp8e4m3_to_float(y[i * k_size + j]);
-            for (int k = 0; k < n_size; ++k)
-            {
-                acc = fp8e4m3_fma(x[i * n_size + k], w[k * k_size + j], acc);
-            }
-            z[i * k_size + j] = float_to_fp8e4m3(acc);
-        }
-    }
-}
-
-
-// Constants for FP8-E5M2 format
-#define FP8E5M2_EXP_MASK  0x7C  // 0111 1100
-#define FP8E5M2_FRAC_MASK 0x03  // 0000 0011
-#define FP8E5M2_SIGN_MASK 0x80  // 1000 0000
-#define FP8E5M2_BIAS      15
-
-// Convert FP8 (E5M2) to float
-float fp8e5m2_to_float(fp8e5m2 value) {
-    uint8_t sign = (value & FP8E5M2_SIGN_MASK) >> 7;
-    uint8_t exponent = (value & FP8E5M2_EXP_MASK) >> 2;
-    uint8_t fraction = value & FP8E5M2_FRAC_MASK;
-
-    if (exponent == 0) {
-        // Subnormal number
-        if (fraction == 0) return sign ? -0.0f : 0.0f;
-        return (sign ? -1.0f : 1.0f) * (fraction / 4.0f) * powf(2, -14);
-    } else if (exponent == 31) {
-        // Infinity or NaN
-        return fraction ? NAN : (sign ? -INFINITY : INFINITY);
-    }
-
-    // Normalized number
-    float mantissa = 1.0f + (fraction / 4.0f);
-    float result = mantissa * powf(2, exponent - FP8E5M2_BIAS);
-    return sign ? -result : result;
-}
-
-// Convert float to FP8 (E5M2)
-fp8e5m2 float_to_fp8e5m2(float value) {
-    if (isnan(value)) return 0x7F;  // NaN representation
-    if (isinf(value)) return value < 0 ? 0xFC : 0x7C;  // +/-Inf
-
-    uint8_t sign = (value < 0) ? 0x80 : 0x00;
-    value = fabsf(value);
-
-    if (value == 0.0f) return 0x00;
-
-    int exponent;
-    float mantissa = frexpf(value, &exponent);  // value = mantissa * 2^exponent, mantissa in [0.5, 1.0)
-
-    exponent += FP8E5M2_BIAS - 1;
-
-    if (exponent < 1) {
-        // Subnormal
-        int frac = (int)roundf(value / powf(2, -14) * 4.0f);
-        return sign | (frac & FP8E5M2_FRAC_MASK);
-    } else if (exponent > 30) {
-        // Overflow → Inf
-        return sign | 0x7C;
-    }
-
-    // Normalized
-    uint8_t frac = (uint8_t)roundf((mantissa - 0.5f) * 8.0f);
-    return sign | ((exponent << 2) & FP8E5M2_EXP_MASK) | (frac & FP8E5M2_FRAC_MASK);
-}
-
-// Fused Multiply-Add for FP8-E5M2
-float fp8e5m2_fma(fp8e5m2 a, fp8e5m2 b, float c) {
-    float fa = fp8e5m2_to_float(a);
-    float fb = fp8e5m2_to_float(b);
-    float result = fa * fb + c;
-    return result;
-}
-
-// Matrix multiplication: z = x * w + y (with z, y, x, w in FP8-E5M2)
-void matmul_fp8e5m2(fp8e5m2 *z, fp8e5m2 *y, fp8e5m2 *x, fp8e5m2 *w, uint16_t m_size, uint16_t n_size, uint16_t k_size) {
-    for (int i = 0; i < m_size; ++i) {
-        for (int j = 0; j < k_size; ++j) {
-            float acc = fp8e5m2_to_float(y[i * k_size + j]);
-            for (int k = 0; k < n_size; ++k) {
-                acc = fp8e5m2_fma(x[i * n_size + k], w[k * k_size + j], acc);
-            }
-            z[i * k_size + j] = float_to_fp8e5m2(acc);
         }
     }
 }

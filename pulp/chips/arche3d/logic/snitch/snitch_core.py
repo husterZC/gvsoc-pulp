@@ -17,6 +17,7 @@
 import cpu.iss.riscv
 from pulp.chips.arche3d.logic.snitch.snitch_isa import *
 from pulp.chips.arche3d.logic.snitch.soft_hier_rvv import extend_arche3d_rvv
+from pulp.chips.arche3d.logic.snitch.special_functions import extend_arche3d_special_functions
 import cpu.iss.isa_gen.isa_rvv
 import cpu.iss.isa_gen.isa_rvv_timed
 from cpu.iss.isa_gen.isa_smallfloats import *
@@ -28,6 +29,10 @@ from pulp.snitch.snitch_core_config import SnitchCoreConfig
 
 def add_latencies(isa, is_fast=False, use_spatz=False):
 
+    if is_fast and use_spatz:
+        isa.add_include('<pulp/chips/arche3d/logic/snitch/spatz_float_formats.hpp>')
+        for name in ('csrrw', 'csrrs', 'csrrc', 'csrrwi', 'csrrsi', 'csrrci'):
+            isa.get_insn(name).set_exec_label('arche3d_' + name)
 
     if is_fast and not use_spatz:
         isa.get_insn('flb').set_exec_label('flb_snitch')
@@ -240,6 +245,8 @@ class SnitchFast(cpu.iss.riscv.RiscvCommon):
                 extend_arche3d_rvv(isa_instance)
                 add_arche3d_includes(isa_instance, redmule=True)
             add_latencies(isa_instance, is_fast=True, use_spatz=inc_spatz)
+            if not pulp_v2:
+                extend_arche3d_special_functions(isa_instance)
             isa_instances[isa_key] = isa_instance
 
             if inc_spatz:
@@ -281,6 +288,7 @@ class SnitchFast(cpu.iss.riscv.RiscvCommon):
 
             self.add_c_flags([
                 "-DCONFIG_GVSOC_ISS_USE_SPATZ",
+                "-DCONFIG_GVSOC_ISS_VECTOR_FMODE",
             ])
 
             # Temporary add sequencer to keep fpu_sequencer working, need to check why it is needed

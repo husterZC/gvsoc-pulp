@@ -23,6 +23,7 @@
 
 #include <cpu/iss/include/isa_lib/int.h>
 #include <cpu/iss/include/isa/rv32v_timed.hpp>
+#include <pulp/chips/arche3d/logic/snitch/special_functions.hpp>
 
 static inline double soft_hier_double_from_bits(uint64_t bits)
 {
@@ -70,6 +71,12 @@ static inline uint64_t soft_hier_double_to_vec_float(Iss *iss, double value)
 
 static inline iss_reg_t soft_hier_vfexp_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
 {
+#ifdef CONFIG_GVSOC_ISS_USE_SPATZ
+    if (iss->vector.sewb <= 2)
+    {
+        return arche3d_vector_special_exec<Arche3dSpecialFunction::Exp>(iss, insn, pc);
+    }
+#endif
     unsigned int sewb = iss->vector.sewb;
     unsigned int lmul = iss->vector.lmul;
 

@@ -60,6 +60,80 @@ This ends with `ARCHE3D_SYNC_RESULT`. The synthetic endpoints exercise NoC
 routing and backpressure; `memory` and `wakeup` separately test the real logic
 tiles, L1 banks, and cluster wakeup controls.
 
+## Floating-point format regression
+
+The `fp_formats` application uses every configured Spatz core in the production
+tile. It checks reset/readback of `fmode`, independent per-core selections,
+FP16/BF16/E5M2/E4M3 addition, FMA, ordered reductions, widening addition, and
+narrowing conversion. Raw expected encodings also cover cancellation to zero,
+subnormal arithmetic, overflow, infinity and NaN. FP32/FP64 are checked in both
+modes.
+
+```bash
+make TARGETS=arche3d_dma_test MODULES="$PWD/pulp/tests/arche3d" build
+make cfg=default app=fp_formats arche3d-sw
+gvrun --target=arche3d_dma_test --target-dir=pulp/tests/arche3d \
+    --binary=build/arche3d/sw/default/fp_formats/fp_formats.elf \
+    --work-dir=build/runs/arche3d_fp_formats run
+```
+
+Expected result: `ARCHE3D_RESULT` with `status: PASS`. The assembly uses standard
+RVV mnemonics with `.option arch, +v`; no patched compiler or new arithmetic
+encoding is required. It issues arithmetic immediately before all six CSR
+write forms, checks the previous value returned by each CSR operation, and
+changes formats without another `vsetvli`. The same raw inputs must produce
+the old format's result before the switch and the new format's result after it.
+VL and VTYPE must be preserved.
+
+Validated on 2026-09-27 with the production `arche3d`, fixture, and ordinary
+`spatz` targets built together. The one-tile and four-tile format runs pass;
+the latter exercises 16 Spatz cores and completes in 17,029 total cycles.
+SDK format/lint checks also pass. Companion regressions:
+
+| Application | Tiles | Result |
+| --- | ---: | --- |
+| `fp_formats` | 4 | PASS; all four formats, CSR ordering, and FP32/FP64 |
+| `smoke` | 1 | PASS; 38 DMA bursts, 19,463 bytes |
+| `memory` | 4 | PASS; per-core stacks and remote L1 |
+| `alltoall` | 4 | PASS; 16 bursts, 16,384 bytes |
+
+These vector checks also caught an arche3d port-width unit mismatch: the
+architecture's 32-bit VLSU width must become **4 bytes** in the VLSU/compute
+model, while VLEN remains expressed in bits. Passing 32 bytes bypassed the
+word-interleaved L1 bank mapping for the later words of a vector transfer.
+The correction fixes those accesses and their modeled bandwidth; it does not
+change floating-point instruction encodings. Other architectures' port
+configuration is unchanged. Run logs and `verification.json` are under
+`build/arche3d/validation/fp_formats/` and are not tracked.
+
+## Special-function regression
+
+Build `app=fp_special` and run its ELF with the same one/four-tile fixture.
+It checks scalar and Spatz exp, sin, cos, sqrt and reciprocal for FP16, BF16,
+E5M2 and E4M3, against independent 200-digit Decimal reference vectors.
+Every FP8 bit pattern is covered, including NaNs; the 16-bit formats use
+boundary cases and deterministic samples. The test also checks exception
+flags, rounding modes, vector masks/tails, in-place and zero-length calls,
+legacy exp decoding, and CSR ordering while vector work is queued.
+
+The CSR ordering test originally failed: a pending vector operation could
+observe a later `frm` write, and `fflags` could be read before completion.
+Arche3d now drains older vector instructions when accessing `fflags`, `frm`
+or `fcsr`, in addition to the existing drain on writes to `fmode`.
+
+See [special functions](../../pulp/chips/arche3d/doc/special_functions.md)
+for the API, timing/accuracy limits and complete build/run instructions.
+`python pulp/tests/arche3d/test_special_functions.py` from the GVSoC root
+checks opcode collisions and preservation of existing encodings.
+
+## Cross-unit floating-point regression
+
+Build `app=fp_alignment` and run on **four tiles**. It compares real scalar,
+Spatz and logic-DMA/NoC sum/max results in all four formats and checks the
+RedMule FP16 accumulator, including internal tile boundaries. The standalone
+`test_float_math.py` provides an independent exact arithmetic oracle.
+See [the arithmetic contract and complete commands](../../pulp/chips/arche3d/doc/float_math.md).
+
 ## Shared instruction-cache regression
 
 The fixture uses the production single ELF loader, shared instruction caches,
