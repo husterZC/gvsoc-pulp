@@ -51,8 +51,8 @@ class FlexClusterArch:
 
         self.dram3d_type = 'hbm4-emu-fast.json'
         self.dram3d_start_base = 0x100000000
-        self.dram3d_node_space = 0x10000
-        self.dram3d_node_interleave = 0x8000
+        self.dram3d_vault_space = 0x8000000  # 128 MiB per vault
+        self.dram3d_vault_interleave = 0x8000
 
         # RV32 execution alias of the shared program at dram3d_start_base.
         self.instruction_base = 0x80000000

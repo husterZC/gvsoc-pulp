@@ -36,8 +36,8 @@ class Board(st.Component):
         module = importlib.import_module('pulp.3d_network.interconnect')
         fabric = module.I3dInterconnect(chip, 'i3d', fabric=2, num_x=nx, num_y=ny,
             axi_addr_width=64, axi_data_width=512, source_contexts=8, memory_contexts=8,
-            memory_base=arch.dram3d_start_base, memory_bytes=arch.dram3d_node_space,
-            interleave_bytes=arch.dram3d_node_interleave)
+            memory_base=arch.dram3d_start_base, memory_bytes=arch.dram3d_vault_space,
+            interleave_bytes=arch.dram3d_vault_interleave)
         Dram = importlib.import_module('pulp.3d_network.dramsys_endpoint').DramsysEndpoint
         data_noc = FlexMeshNoCV2(chip, 'noc2d', width=arch.noc2d_link_width // 8,
             nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding)

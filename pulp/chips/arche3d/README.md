@@ -88,8 +88,10 @@ and at most 256 beats per burst. All dies run at 1 GHz.
 
 Each DRAM endpoint uses `hbm4-emu-fast.json` through the existing GVSoC DRAMSys
 configuration convention. There is no extra memory-read-slot limit: DRAMSys
-supplies memory timing and request capacity. `dram3d_node_space` is the exposed
-address space per channel, not the physical capacity of the DRAMSys memspec.
+supplies memory timing and request capacity. `dram3d_vault_space` is the exposed
+address space per vault, modeled by one DRAMSys channel. It defaults to
+`0x8000000` (128 MiB); `dram3d_vault_interleave` defaults to `0x8000`
+(32 KiB). This exposed space is separate from the DRAMSys memspec capacity.
 
 ## Memory and numbering
 
@@ -103,9 +105,9 @@ address space per channel, not the physical capacity of the DRAMSys memspec.
 | Wakeup command | `0x50000000`, 4 B | Multicast notification over the sync NoC |
 | Program alias | `0x80000000`, 32 MiB | RV32 read/execute alias, shared 32-KiB cache per cluster |
 | System registers | `0x90000000`, 64 KiB | Runtime control |
-| 3D DRAM | `0x100000000`, 64 MiB total | 64 KiB per channel, 32-KiB interleaving |
+| 3D DRAM | `0x100000000`, 128 GiB total | 128 MiB per vault, 32-KiB interleaving |
 | Shared program in DRAM | `0x100000000`–`0x101ffffff` | First stripe, one ELF image for the system |
-| Application DRAM | `0x102000000`–`0x103ffffff` | Second stripe, 32 KiB per channel for DMA data |
+| Application DRAM | `0x102000000`–`0x20ffffffff` | All stripes after the program; 128 MiB minus 32 KiB per vault |
 
 There is no separate stack memory or mapping at `0x10000000`. The default
 `cluster_stack_size` reserves `num_core_per_cluster * 4096` bytes at the top
@@ -212,8 +214,8 @@ initial data image. It is not an L1 data cache.
 RV32 cores cannot use `0x100000000` as their PC. `instruction_base=0x80000000`
 is an executable alias: cache refills translate it to `dram3d_start_base`.
 There is no instruction-memory component behind this alias. The first stripe
-across all channels is reserved for one shared program image. The approved
-64-KiB channel window leaves a second 32-KiB stripe for application data.
+across all vaults is reserved for one shared program image. Each 128-MiB
+vault leaves 128 MiB minus 32 KiB for application data in the remaining stripes.
 Use `arche3d_dram_data_address(terminal, offset)` for this storage;
 `arche3d_dram_address` remains the raw physical-address helper.
 

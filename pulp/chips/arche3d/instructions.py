@@ -10,7 +10,7 @@ from utils.loader.loader import ElfLoader
 
 def instruction_window(arch):
     """Reserve the first interleaving stripe of every channel for one image."""
-    return arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_node_interleave
+    return arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_vault_interleave
 
 
 class ProgramImage:
@@ -51,7 +51,7 @@ class ProgramImage:
         # bytes in gaps/padding, including the optional benchmark pattern.
         self.preheat_data = bytearray(self.preheat_size)
         if initial_pattern:
-            stride = arch.dram3d_node_interleave
+            stride = arch.dram3d_vault_interleave
             for i in range(self.preheat_size):
                 offset = self.preheat_base + i - arch.instruction_base
                 endpoint, local = divmod(offset, stride)
@@ -103,7 +103,7 @@ class I3dPort(st.Component):
         self.add_sources(['pulp/chips/arche3d/i3d_port.cpp'])
         self.add_properties(dict(memory_base=arch.dram3d_start_base,
             alias_base=arch.instruction_base, image_size=instruction_window(arch),
-            interleave=arch.dram3d_node_interleave, id_width=arch.i3d_axi_id_width,
+            interleave=arch.dram3d_vault_interleave, id_width=arch.i3d_axi_id_width,
             max_bytes=arch.i3d_max_burst_beats * arch.i3d_axi_data_width // 8))
 
     def i_INPUT(self, port):

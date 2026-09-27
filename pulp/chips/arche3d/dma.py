@@ -20,15 +20,15 @@ class I3dDma(st.Component):
             loc_base=arch.cluster_tcdm_base, loc_size=arch.cluster_tcdm_size,
             tcdm_width=arch.cluster_tcdm_bank_nb * arch.cluster_tcdm_bank_width // 8,
             memory_base=arch.dram3d_start_base,
-            memory_size=arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_node_space,
-            interleave_bytes=arch.dram3d_node_interleave,
+            memory_size=arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_vault_space,
+            interleave_bytes=arch.dram3d_vault_interleave,
             axi_bytes=arch.i3d_axi_data_width // 8,
             max_burst_beats=arch.i3d_max_burst_beats))
         axi = st.Component(self, 'axi')
         axi.add_sources(['pulp/chips/arche3d/dma_axi.cpp'])
         axi.add_properties(dict(capacity=arch.idma_outstand_burst,
             id_width=arch.i3d_axi_id_width, check_pattern=check_pattern,
-            memory_base=arch.dram3d_start_base, interleave=arch.dram3d_node_interleave,
+            memory_base=arch.dram3d_start_base, interleave=arch.dram3d_vault_interleave,
             terminals=arch.num_cluster_x * arch.num_cluster_y))
         self.bind(local, 'request', axi, 'request')
         self.bind(axi, 'done', local, 'done')

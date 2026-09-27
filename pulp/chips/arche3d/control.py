@@ -7,7 +7,7 @@ class Control(st.Component):
         super().__init__(parent, name)
         self.add_sources(['pulp/chips/arche3d/control.cpp'])
         self.add_properties(dict(nx=arch.num_cluster_x, ny=arch.num_cluster_y,
-            memory_base=arch.dram3d_start_base, interleave=arch.dram3d_node_interleave,
+            memory_base=arch.dram3d_start_base, interleave=arch.dram3d_vault_interleave,
             axi_bytes=arch.i3d_axi_data_width // 8, progress_cycles=progress_cycles,
             watchdog_cycles=10_000_000, image_bytes=image.size if image else 0,
             preheat_lines=image.preheat_size // arch.icache_line_size if image else 0,

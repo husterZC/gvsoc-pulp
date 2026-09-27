@@ -45,8 +45,8 @@ class Board(st.Component):
             axi_data_width=arch.i3d_axi_data_width, axi_id_width=arch.i3d_axi_id_width,
             axi_len_width=arch.i3d_axi_len_width, source_contexts=arch.i3d_source_contexts,
             memory_contexts=arch.i3d_memory_contexts, max_burst_beats=arch.i3d_max_burst_beats,
-            memory_base=arch.dram3d_start_base, interleave_bytes=arch.dram3d_node_interleave,
-            memory_bytes=arch.dram3d_node_space)
+            memory_base=arch.dram3d_start_base, interleave_bytes=arch.dram3d_vault_interleave,
+            memory_bytes=arch.dram3d_vault_space)
         data_noc = FlexMeshNoCV2(chip, 'noc2d', width=arch.noc2d_link_width // 8,
             nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding)
         sync_noc = FlexMeshNoC(chip, 'sync_noc', width=4, nb_x_clusters=nx, nb_y_clusters=ny,
@@ -64,7 +64,7 @@ class Board(st.Component):
             memory = dram_module.DramsysEndpoint(chip, f'dram3d_{terminal}',
                 dram_type=arch.dram3d_type, data_width=arch.i3d_axi_data_width,
                 benchmark_init=memory_init == 'pattern', endpoint_id=terminal,
-                init_size=arch.dram3d_node_space)
+                init_size=arch.dram3d_vault_space)
             network.o_OUTPUT(terminal, memory.i_INPUT())
             narrow = Router(chip, f'control_router_{cluster_id}')
             narrow.o_MAP(control.i_INPUT(cluster_id), base=arch.soc_register_base,

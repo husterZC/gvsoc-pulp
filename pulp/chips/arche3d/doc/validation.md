@@ -1,12 +1,17 @@
 # arche3d validation
 
 Validated on 2026-09-26 using the conventional GVSoC build/run flow in the
-[architecture guide](../README.md). The current 32 × 32 software all-to-all
+[architecture guide](../README.md). The recorded 32 × 32 software all-to-all
 benchmark passes in **45,578.5 DMA cycles**, **0.07465%** above the recorded
 45,544.5-cycle network-only reference. Caches are initialized directly at time
 zero; cores start at cycle 62 and incur no runtime instruction-cache refills
-in this application. The current default also uses TCDM stacks, remote L1 and
+in this application. The measured configuration used TCDM stacks, remote L1 and
 multicast wakeup on the sync NoC, and 64 KiB per DRAM channel.
+
+The default now uses `dram3d_vault_space=0x8000000` (128 MiB per vault)
+and `dram3d_vault_interleave=0x8000` (32 KiB). Measurements below retain
+their original capacities; they are not a new full-chip run with the larger map.
+
 Both GVSoC and DRAMSys were built in `Release` mode. The host was an AMD Ryzen 7
 5800X; wall times describe this machine and are not simulated hardware timing.
 

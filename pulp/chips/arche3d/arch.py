@@ -44,7 +44,7 @@ def load_arch(config='default'):
                        (arch.cluster_reg_base, arch.cluster_reg_size + 128),
                        (arch.redmule_reg_base, arch.redmule_reg_size),
                        (arch.instruction_base, arch.num_cluster_x * arch.num_cluster_y *
-                        arch.dram3d_node_interleave),
+                        arch.dram3d_vault_interleave),
                        (arch.soc_register_base, arch.soc_register_size)):
         if arch.sync_wakeup_addr < base + size and base < arch.sync_wakeup_addr + 4:
             raise ValueError('The wakeup command must not overlap L1 or other scalar mappings')
@@ -64,18 +64,18 @@ def load_arch(config='default'):
     if arch.idma_outstand_burst > 1 << arch.i3d_axi_id_width:
         raise ValueError('DMA outstanding bursts exceed the distinct AXI ID space')
     for attr in ('idma_outstand_txn', 'idma_outstand_burst', 'i3d_source_contexts',
-                 'i3d_memory_contexts', 'dram3d_node_interleave', 'dram3d_node_space'):
+                 'i3d_memory_contexts', 'dram3d_vault_interleave', 'dram3d_vault_space'):
         if getattr(arch, attr) <= 0:
             raise ValueError(f'{attr} must be positive')
-    if arch.dram3d_node_space % arch.dram3d_node_interleave:
-        raise ValueError('DRAM node space must contain complete interleaving stripes')
-    if arch.dram3d_node_space < 2 * arch.dram3d_node_interleave:
-        raise ValueError('DRAM needs a program stripe and at least one data stripe per channel')
-    if arch.dram3d_node_interleave % (width // 8):
+    if arch.dram3d_vault_space % arch.dram3d_vault_interleave:
+        raise ValueError('DRAM vault space must contain complete interleaving stripes')
+    if arch.dram3d_vault_space < 2 * arch.dram3d_vault_interleave:
+        raise ValueError('DRAM needs a program stripe and at least one data stripe per vault')
+    if arch.dram3d_vault_interleave % (width // 8):
         raise ValueError('DRAM interleave must be an integral number of AXI beats')
-    if arch.dram3d_start_base % arch.dram3d_node_interleave:
+    if arch.dram3d_start_base % arch.dram3d_vault_interleave:
         raise ValueError('DRAM base must be interleave aligned')
-    if arch.dram3d_start_base + 1024 * arch.dram3d_node_space > 1 << arch.i3d_axi_addr_width:
+    if arch.dram3d_start_base + 1024 * arch.dram3d_vault_space > 1 << arch.i3d_axi_addr_width:
         raise ValueError('DRAM address range exceeds AXI address width')
     for attr in ('icache_size', 'icache_line_size', 'icache_core_width'):
         value = getattr(arch, attr)
@@ -85,9 +85,9 @@ def load_arch(config='default'):
         raise ValueError('Instruction lines must contain the 32-byte ISS prefetch, and fit the cache')
     if arch.icache_core_width < 256:
         raise ValueError('Each instruction port must supply at least a 256-bit ISS prefetch per cycle')
-    if arch.dram3d_node_interleave % arch.icache_line_size:
+    if arch.dram3d_vault_interleave % arch.icache_line_size:
         raise ValueError('DRAM stripes must contain whole instruction cache lines')
-    image_size = arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_node_interleave
+    image_size = arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_vault_interleave
     if (arch.instruction_base % arch.icache_line_size or arch.instruction_base < 0 or
             arch.instruction_base + image_size > 1 << 32):
         raise ValueError('The instruction alias must be cache-line aligned and fit RV32')
