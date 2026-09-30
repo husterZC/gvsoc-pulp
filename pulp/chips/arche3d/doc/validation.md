@@ -275,8 +275,10 @@ isolation logs and the comparison report are under
 
 ## TCDM stacks, remote L1, and multicast wakeup
 
-The current default reserves the top 24 KiB of each cluster's 384-KiB TCDM for
-six 4-KiB stacks. No dedicated stack component or `0x10000000` mapping remains.
+The checks in this section used the then-default 384-KiB TCDM, reserving its
+top 24 KiB for six 4-KiB stacks. The addresses below describe that configuration;
+the current 432-KiB default layout is documented in [the README](../README.md#memory-and-numbering).
+No dedicated stack component or `0x10000000` mapping remains.
 The SDK links data/BSS/heap below `0x5a000`, leaves the stack reservation out of
 loadable ELF segments and BSS initialization, and initializes SP from
 `__stack_end` (`0x60000`) minus the core's slice offset.

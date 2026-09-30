@@ -10,7 +10,7 @@ class FlexClusterArch:
         self.cluster_tcdm_bank_width = 32
         self.cluster_tcdm_bank_nb = 128
         self.cluster_tcdm_base = 0x00000000
-        self.cluster_tcdm_size = 0x00060000
+        self.cluster_tcdm_size = 0x0006C000  # 432 KiB
         self.cluster_tcdm_remote = 0x30000000
         # Reserve 4 KiB per core at the top of the shared TCDM.
         self.cluster_stack_size = self.num_core_per_cluster * 0x1000
@@ -24,8 +24,8 @@ class FlexClusterArch:
         self.spatz_attaced_core_list = [0, 1, 2, 3]
         self.spatz_num_vlsu_port = 8
         self.spatz_num_function_unit = 4
-        self.redmule_ce_height = 32
-        self.redmule_ce_width = 16
+        self.redmule_ce_height = 16
+        self.redmule_ce_width = 32
         self.redmule_ce_pipe = 1
         self.redmule_elem_size = 2
         self.redmule_queue_depth = 1

@@ -17,7 +17,7 @@ module dependencies.
 ```mermaid
 flowchart BT
   subgraph Logic[Logic die: 32 × 32 SoftHier tiles]
-    PE[6 cores + Spatz + RedMule] <--> L1[384 KiB banked L1 per tile]
+    PE[6 cores + Spatz + RedMule] <--> L1[432 KiB banked L1 per tile]
     PE --> IC[Shared 32-KiB instruction cache]
     PE --> DMA2[Logic-die DMA]
     DMA2 <--> Mesh[1024-bit 2D NoC]
@@ -86,6 +86,10 @@ accepts `fattree`, `mesh`, or `xbar`. Fat-tree routing accepts `NCA_HASH` or
 contexts, eight memory contexts, AXI address/data/ID/LEN widths 64/512/10/8,
 and at most 256 beats per burst. All dies run at 1 GHz.
 
+The default cluster has 432 KiB of TCDM and a 16 × 32 RedMule array. TCDM bank
+timing prioritizes DMA over RedMule and other HWPE accesses, then core/vector
+accesses. All paths still access the same physical banks.
+
 Each DRAM endpoint uses `hbm4-emu-fast.json` through the existing GVSoC DRAMSys
 configuration convention. There is no extra memory-read-slot limit: DRAMSys
 supplies memory timing and request capacity. `dram3d_vault_space` is the exposed
@@ -97,11 +101,11 @@ address space per vault, modeled by one DRAMSys channel. It defaults to
 
 | Region | Address | Scope |
 | --- | --- | --- |
-| L1 | `0x00000000`, 384 KiB | Data and all core stacks, shared within each cluster |
-| Stacks within L1 | `0x0005a000`–`0x0005ffff`, 24 KiB | Six downward-growing stacks, 4 KiB per core |
+| L1 | `0x00000000`, 432 KiB | Data and all core stacks, shared within each cluster |
+| Stacks within L1 | `0x00066000`–`0x0006bfff`, 24 KiB | Six downward-growing stacks, 4 KiB per core |
 | Zero memory | `0x18000000`, 128 KiB | Logic-die DMA |
 | Cluster registers | `0x20000000`, 512 B | SoftHier tile |
-| Remote L1 | `0x30000000 + cluster_id * 0x60000` | Core loads/stores via sync NoC; logic DMA via data NoC |
+| Remote L1 | `0x30000000 + cluster_id * 0x6c000` | Core loads/stores via sync NoC; logic DMA via data NoC |
 | Wakeup command | `0x50000000`, 4 B | Multicast notification over the sync NoC |
 | Program alias | `0x80000000`, 32 MiB | RV32 read/execute alias, shared 32-KiB cache per cluster |
 | System registers | `0x90000000`, 64 KiB | Runtime control |
@@ -112,10 +116,10 @@ address space per vault, modeled by one DRAMSys channel. It defaults to
 There is no separate stack memory or mapping at `0x10000000`. The default
 `cluster_stack_size` reserves `num_core_per_cluster * 4096` bytes at the top
 of TCDM; `cluster_stack_base` is the start of that reservation. Each core gets
-an equal, 16-byte-aligned slice. Core 0 starts with SP `0x60000`, core 1 with
-`0x5f000`, through core 5 with `0x5b000`. Stacks use the same banked L1 ports
+an equal, 16-byte-aligned slice. Core 0 starts with SP `0x6c000`, core 1 with
+`0x6b000`, through core 5 with `0x67000`. Stacks use the same banked L1 ports
 as ordinary data and contend with other L1 users. The linker confines data,
-BSS, and the available heap to the region below `0x5a000`, reserving the first
+BSS, and the available heap to the region below `0x66000`, reserving the first
 64 bytes as before. Oversized data/BSS fails at link time. Rebuild software
 after changing this layout; binaries built for the old stack map will not run.
 
@@ -128,7 +132,7 @@ For example, core loads/stores through a volatile pointer to that address can
 exchange data with another cluster without using either DMA. Remote word
 atomics also use the synchronization path.
 
-The full remote-L1 range is `0x30000000`–`0x47ffffff`, so the special wakeup
+The full remote-L1 range is `0x30000000`–`0x4affffff`, so the special wakeup
 address is **`sync_wakeup_addr=0x50000000`**, outside that range. There are no
 per-cluster sync-memory windows and no `sync_interleave`/`sync_special_mem`
 parameters. A write to the wakeup command multicasts one notification to the

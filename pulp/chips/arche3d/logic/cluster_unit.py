@@ -23,6 +23,7 @@ from pulp.chips.arche3d.logic.cluster_registers import ClusterRegisters
 from pulp.chips.arche3d.logic.light_redmule import LightRedmule
 from pulp.chips.arche3d.logic.offload_decoder import Arche3dOffloadDecoder
 from pulp.chips.arche3d.logic.hwpe_interleaver import HWPEInterleaver
+from pulp.chips.arche3d.logic.priority_arbiter_filter import PriorityArbiterFilter
 from pulp.chips.arche3d.logic.transpose_engine import TransposeEngine
 from pulp.chips.arche3d.logic.util_dumpper import UtilDumpper
 from pulp.chips.arche3d.logic.snitch.snitch_cluster.dma_interleaver import DmaInterleaver
@@ -120,9 +121,11 @@ class ClusterTcdm(gvsoc.systree.Component):
         super().__init__(parent, name)
 
         banks = []
+        prior_arbiters = []
         nb_banks = arch.nb_tcdm_banks
         for i in range(0, nb_banks):
             banks.append(memory.Memory(self, f'bank_{i}', size=arch.bank_size, atomics=True, width_log2=int(math.log2(arch.bank_width)), tech_node=arch.tech_node))
+            prior_arbiters.append(PriorityArbiterFilter(self, f'prior_arbiter_{i}', bank_width=arch.bank_width))
 
         interleaver = L1_interleaver(self, 'interleaver', nb_slaves=nb_banks,
             nb_masters=arch.nb_masters, interleaving_bits=int(math.log2(arch.bank_width)))
@@ -138,9 +141,10 @@ class ClusterTcdm(gvsoc.systree.Component):
 
         for i in range(0, nb_banks):
             self.bind(interleaver, 'out_%d' % i, banks[i], 'input')
-            self.bind(dma_interleaver, 'out_%d' % i, banks[i], 'input')
-            self.bind(bus_interleaver, 'out_%d' % i, banks[i], 'input')
-            self.bind(hwpe_interleaver, 'out_%d' % i, banks[i], 'input')
+            self.bind(prior_arbiters[i], 'out', banks[i], 'input')
+            self.bind(dma_interleaver, 'out_%d' % i, prior_arbiters[i], 'input')
+            self.bind(bus_interleaver, 'out_%d' % i, prior_arbiters[i], 'input')
+            self.bind(hwpe_interleaver, 'out_%d' % i, prior_arbiters[i], 'input')
 
         for i in range(0, arch.nb_masters):
             self.bind(self, f'in_{i}', interleaver, f'in_{i}')
