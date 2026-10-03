@@ -9,14 +9,13 @@ class IoBridge : public vp::Component {
     vp::WireMaster<Arche3dIoAccess *> request;
     vp::WireSlave<Arche3dIoAccess *> done;
     uint64_t base, size;
-    bool read_only;
     static vp::IoReqStatus access(vp::Block *block, vp::IoReq *req) {
         auto self = static_cast<IoBridge *>(block);
         uint64_t addr = req->get_addr(), bytes = req->get_size();
         if (!bytes || !req->get_data() || addr < self->base ||
             addr - self->base >= self->size || bytes > self->size - (addr - self->base) ||
-            (self->read_only && req->get_is_write())) return vp::IO_REQ_INVALID;
-        auto a = new Arche3dIoAccess{addr, bytes, req->get_data(), req, req->get_is_write()};
+            req->get_is_write()) return vp::IO_REQ_INVALID;
+        auto a = new Arche3dIoAccess{addr, bytes, req->get_data(), req};
         self->request.sync(a);
         if (a->pending) return vp::IO_REQ_PENDING;
         req->inc_latency(a->latency);
@@ -35,7 +34,6 @@ public:
     explicit IoBridge(vp::ComponentConf &config) : vp::Component(config) {
         base = get_js_config()->get_uint("base");
         size = get_js_config()->get_uint("size");
-        read_only = get_js_config()->get("read_only")->get_bool();
         input.set_req_meth(access); done.set_sync_meth(complete);
         new_slave_port("input", &input); new_slave_port("done", &done);
         new_master_port("request", &request);

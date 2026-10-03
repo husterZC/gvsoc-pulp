@@ -36,7 +36,6 @@ class Arche3dCluster(ClusterUnit):
         self.instruction_cache.o_REFILL(port.i_INPUT(1))
         self.itf_bind('cache_preload', self.instruction_cache.i_PRELOAD(),
                       signature='wire<Arche3dIcachePreload>', composite_bind=True)
-        self.itf_bind('program_load', port.i_INPUT(2), signature=IoV2SingleReq(), composite_bind=True)
         port.o_OUTPUT(st.SlaveItf(self, 'i3d', signature=IoV2SingleReq()))
         port.o_CACHE_REFILLS(st.SlaveItf(self, 'cache_refills', signature='wire<uint64_t>'))
         self.extra_dma.o_ACTIVITY(st.SlaveItf(self, 'i3d_activity',
@@ -47,9 +46,6 @@ class Arche3dCluster(ClusterUnit):
 
     def o_I3D_ACTIVITY(self, itf):
         self.itf_bind('i3d_activity', itf, signature='wire<Arche3dDmaEvent>')
-
-    def i_PROGRAM_LOAD(self):
-        return st.SlaveItf(self, 'program_load', signature=IoV2SingleReq())
 
     def i_CACHE_PRELOAD(self):
         return st.SlaveItf(self, 'cache_preload', signature='wire<Arche3dIcachePreload>')

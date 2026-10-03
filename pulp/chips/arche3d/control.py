@@ -10,6 +10,7 @@ class Control(st.Component):
             memory_base=arch.dram3d_start_base, interleave=arch.dram3d_vault_interleave,
             axi_bytes=arch.i3d_axi_data_width // 8, progress_cycles=progress_cycles,
             watchdog_cycles=10_000_000, image_bytes=image.size if image else 0,
+            dram_preloaded_bytes=image.preload_bytes if image else 0,
             preheat_lines=image.preheat_size // arch.icache_line_size if image else 0,
             preheat_base=image.preheat_base if image else 0,
             preheat_data=image.preheat_data.hex() if image else ''))
@@ -22,9 +23,6 @@ class Control(st.Component):
 
     def o_READY(self, itf):
         self.itf_bind('ready', itf, signature='wire<bool>')
-
-    def i_IMAGE_LOADED(self):
-        return st.SlaveItf(self, 'image_loaded', signature='wire<bool>')
 
     def i_CACHE_REFILLS(self, cluster):
         return st.SlaveItf(self, f'cache_refills_{cluster}', signature='wire<uint64_t>')

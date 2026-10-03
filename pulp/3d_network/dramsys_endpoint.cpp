@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -44,6 +45,7 @@ class DramsysEndpoint : public vp::Component {
     int64_t last_read=-1, last_write=-1;
     uint64_t read_requests=0, write_requests=0, native_reads=0, native_writes=0;
     uint64_t read_bytes=0, write_bytes=0, response_denials=0, request_denials=0, peak_reads=0;
+    uint64_t preloaded_bytes=0;
 
     int (*can_accept)(int), (*has_read)(int), (*has_write)(int), (*get_write)(int);
     void (*get_read)(int,uint64_t,void*);
@@ -55,6 +57,36 @@ class DramsysEndpoint : public vp::Component {
     template<typename T> void symbol(T &ptr,const char *name) {
         ptr=reinterpret_cast<T>(dlsym(library,name));
         if (!ptr) throw std::runtime_error(std::string("DRAMSys missing C ABI symbol: ")+name);
+    }
+    void preload_image(js::Config *config) {
+        auto segments=config->get("preload_segments");
+        if (!segments || segments->get_elems().empty()) return;
+        std::ifstream file(config->get_child_str("preload_file"),std::ios::binary);
+        if (!file) throw std::runtime_error("Cannot open DRAM preload ELF");
+        file.seekg(0,std::ios::end);
+        const auto file_end=file.tellg();
+        if (file_end<0) throw std::runtime_error("Cannot size DRAM preload ELF");
+        std::vector<uint8_t> buffer(65536);
+        for (auto segment:segments->get_elems()) {
+            auto values=segment->get_elems();
+            if (values.size()!=4) throw std::runtime_error("Invalid DRAM preload fragment");
+            uint64_t address=values[0]->get_int(), offset=values[1]->get_int();
+            uint64_t copied=values[2]->get_int(), length=values[3]->get_int();
+            if (!length || copied>length || address>size || length>size-address ||
+                offset>uint64_t(file_end) || copied>uint64_t(file_end)-offset)
+                throw std::runtime_error("DRAM preload fragment outside memory or ELF");
+            file.seekg(offset);
+            for (uint64_t done=0;done<length;) {
+                size_t count=std::min<uint64_t>(buffer.size(),length-done);
+                size_t bytes=done<copied?std::min<uint64_t>(count,copied-done):0;
+                if (bytes && !file.read(reinterpret_cast<char*>(buffer.data()),bytes))
+                    throw std::runtime_error("Truncated DRAM preload ELF");
+                std::fill(buffer.begin()+bytes,buffer.begin()+count,0);
+                for (size_t i=0;i<count;++i) preload(id,address+done+i,buffer[i]);
+                done+=count;
+            }
+            preloaded_bytes+=length;
+        }
     }
     void wake() { if (!in_tick) event.enable(); }
     void sync_sc() {
@@ -255,6 +287,9 @@ public:
             for (uint64_t a=0;a<uint64_t(js->get_child_int("init_size"));++a)
                 preload(id,a,(17*endpoint+13*a+(a>>8))&255);
         }
+        // Populate backing storage before execution. This does not issue
+        // requests, advance SystemC time, or change DRAM scheduling state.
+        preload_image(js);
         new_slave_port("input",&input);
     }
     void reset(bool active) override {
@@ -265,9 +300,10 @@ public:
         reported=true;
         printf("DRAMSYS_ENDPOINT_RESULT {\"channel\":%d,\"read_requests\":%lu,\"write_requests\":%lu,"
                "\"native_reads\":%lu,\"native_writes\":%lu,\"read_bytes\":%lu,\"write_bytes\":%lu,"
-               "\"request_denials\":%lu,\"response_denials\":%lu,\"peak_reads\":%lu,\"pending\":%zu}\n",
+               "\"request_denials\":%lu,\"response_denials\":%lu,\"peak_reads\":%lu,\"pending\":%zu,"
+               "\"preloaded_bytes\":%lu}\n",
                id,read_requests,write_requests,native_reads,native_writes,read_bytes,write_bytes,
-               request_denials,response_denials,peak_reads,jobs.size());
+               request_denials,response_denials,peak_reads,jobs.size(),preloaded_bytes);
     }
     ~DramsysEndpoint() {
         if (read_beat) read_beat->free(); if (write_ack) write_ack->free();

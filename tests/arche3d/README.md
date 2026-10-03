@@ -137,8 +137,8 @@ See [the arithmetic contract and complete commands](../../pulp/chips/arche3d/doc
 
 ## Shared instruction-cache regression
 
-The fixture uses the production single ELF loader, shared instruction caches,
-I3D source arbitration, and direct cache initialization. Existing `memory` and `wakeup`
+The fixture uses production direct ELF population of HBM, shared instruction
+caches, I3D source arbitration, and direct cache initialization. Existing `memory` and `wakeup`
 images fit in the cache and should report `icache_runtime_refills: 0`.
 
 The `icache` application places six different functions beyond the first 32 KiB
@@ -156,7 +156,9 @@ gvrun --target=arche3d_dma_test --target-dir=pulp/tests/arche3d \
 Use four tiles: the deliberately padded test ELF spans multiple 32-KiB program
 stripes. This should report runtime refills and complete all DMA transfers.
 `ARCHE3D_BOOT` must precede software execution and the final `ARCHE3D_RESULT`.
-Preheating must report `preheat_mode: direct` and `preheat_cycles: 0`.
+Loading must report `image_load_mode: direct`, `image_loaded_cycle: 0`, and
+`cores_start_cycle: 1`. Preheating must report `preheat_mode: direct` and
+`preheat_cycles: 0`.
 `icache_preloaded_lines` counts directly initialized lines; `icache_refills`
 counts only actual downstream reads.
 

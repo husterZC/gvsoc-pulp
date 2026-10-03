@@ -225,28 +225,38 @@ Use `arche3d_dram_data_address(terminal, offset)` for this storage;
 
 Boot proceeds as follows:
 
-1. At simulation initialization, one ELF snapshot is broadcast directly to
+1. The simulator directly populates the HBM channels' backing memory from the
+   ELF, splitting its segments according to the normal DRAM interleaving.
+   Optional `.arche3d.dram` records contain prepared inputs at 64-bit physical
+   addresses. This takes zero simulated cycles and issues no timed requests.
+2. At reset release, one ELF snapshot is broadcast directly to
    every cache. The model copies data, valid tags and line state for the
    entry-containing window, up to 32 KiB. This preheating takes **zero simulated
    cycles** and issues no I3D/DRAMSys requests. It models an already warm cache;
    it does not model the hardware cost of warming it.
-2. One system `ElfLoader` writes the ELF's loadable segments into DRAM through
-   I3D. The linker places text/rodata and the initial data image in this region.
-3. After the DRAM writes complete, the system releases all cores together.
-   `ARCHE3D_BOOT` reports `preheat_mode: direct`, `preheat_cycles: 0`, and the
-   load and release cycles. The ELF image is stored once in DRAM so ordinary
-   misses can fetch it later.
+3. After memory and caches are initialized, the system releases all cores
+   together. `ARCHE3D_BOOT` reports `image_load_mode: direct`,
+   `image_loaded_cycle: 0`, `dram_preloaded_bytes`, `preheat_mode: direct`,
+   `preheat_cycles: 0`, and the release cycle. The program stays in DRAM so
+   ordinary misses can fetch it later through the timed path.
 4. Cluster core 0 copies initialized data from the shared image into local L1,
    clears local BSS, and releases its peers through the local barrier. Each
    core retains its 4-KiB L1 stack and calls `main()`.
 
 Programs larger than the preheated window use demand refills during execution.
+Direct DRAM population leaves row buffers and controller timing in their
+initial state. Direct population is the only ELF-loading path; no clocked
+system loader or loader-only I3D port is instantiated. Software tensor generation
+still costs cycles unless the application uses prepared inputs. The
+[SDK example](../../../../arche3d_sdk/kernelbench/DSA/dsa_sparse_attention_h16_ckv512_kpe64/doc/README.md)
+documents ELF-prepared inputs and the one-query and 1024-query benchmarks.
+
 Core `fence.i` signals invalidate the shared cache. No code/data coherence is
 provided for DMA writes to executable memory; keep application buffers in the
 second stripe. `icache_size`, `icache_line_size`, and `icache_core_width` are
 hardware configuration parameters. The obsolete `instruction_mem_base` and
 `instruction_mem_size` fields have been removed. **Rebuild existing ELFs**:
-the loader rejects the old per-cluster L1 load-segment layout.
+the ELF reader rejects the old per-cluster L1 load-segment layout.
 
 `ARCHE3D_RESULT` separates `boot_cycles`, total simulation cycles, and the
 existing DMA benchmark interval. `icache_preloaded_lines` counts lines copied

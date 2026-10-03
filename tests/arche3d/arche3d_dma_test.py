@@ -9,7 +9,7 @@ from gvrun.parameter import TargetParameter
 from pulp.chips.arche3d.arch import load_arch
 from pulp.chips.arche3d.cluster import Arche3dCluster
 from pulp.chips.arche3d.control import Control
-from pulp.chips.arche3d.instructions import ProgramImage, system_loader
+from pulp.chips.arche3d.instructions import ProgramImage
 from pulp.chips.arche3d.logic.flex_mesh_noc import FlexMeshNoC
 from pulp.chips.arche3d.logic.flex_mesh_noc_v2 import FlexMeshNoCV2
 
@@ -56,10 +56,9 @@ class Board(st.Component):
             control.o_READY(tile.i_BOOT_READY())
             control.o_CACHE_PRELOAD(tile.i_CACHE_PRELOAD())
             tile.o_CACHE_REFILLS(control.i_CACHE_REFILLS(cluster_id))
-            if cluster_id == 0:
-                system_loader(chip, arch, image, control, tile)
             tile.o_I3D_ACTIVITY(control.i_ACTIVITY(cluster_id))
-            memory = Dram(chip, f'dram_{cluster_id}', data_width=512, dram_type=arch.dram3d_type)
+            memory = Dram(chip, f'dram_{cluster_id}', data_width=512, dram_type=arch.dram3d_type,
+                preload_file=image.binary, preload_segments=image.channel_preloads[terminal])
             tile.o_I3D(fabric.i_INPUT(terminal))
             fabric.o_OUTPUT(terminal, memory.i_INPUT())
             tile.o_WIDE_SOC(data_noc.i_CLUSTER_INPUT(x, y))

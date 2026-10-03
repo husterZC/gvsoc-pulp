@@ -1,5 +1,12 @@
 # arche3d validation
 
+The measurements below are historical. Since 2026-10-02, the simulator directly
+populates HBM from the ELF at cycle zero and releases cores at cycle 1. The
+timed program loader has been removed. Its earlier boot/traffic counts below
+remain recorded as measured; they do not describe the current loading path.
+See the [DSA validation](../../../../../arche3d_sdk/kernelbench/DSA/dsa_sparse_attention_h16_ckv512_kpe64/doc/results.md)
+for current startup checks and one-query and 1024-query attention runs.
+
 Validated on 2026-09-26 using the conventional GVSoC build/run flow in the
 [architecture guide](../README.md). The recorded 32 × 32 software all-to-all
 benchmark passes in **45,578.5 DMA cycles**, **0.07465%** above the recorded
@@ -15,7 +22,7 @@ their original capacities; they are not a new full-chip run with the larger map.
 Both GVSoC and DRAMSys were built in `Release` mode. The host was an AMD Ryzen 7
 5800X; wall times describe this machine and are not simulated hardware timing.
 
-## Current full benchmark with direct cache initialization
+## Recorded full benchmark with direct cache initialization
 
 The production target has 1,024 clusters / 6,144 cores, the level-3 Adaptive NCA
 fat tree, eight source and memory contexts, and 1,024 HBM4 DRAMSys channels.
@@ -24,7 +31,7 @@ The clock is 1 GHz, AXI data width is 512 bits, and channel space/interleaving
 is 64 KiB / 32 KiB. All reads use the second stripe, at endpoint-local offset
 `0x8000`, so the program image in the first stripe remains intact.
 
-| Metric | Current measurement |
+| Metric | Recorded measurement |
 | --- | ---: |
 | DMA interval (`network_cycles`) | **45,578.5 cycles** |
 | Difference from 45,544.5-cycle reference | **+34 cycles / +0.07465%** |
@@ -332,7 +339,7 @@ Current build/run logs and the verification report are under
 `build/arche3d/validation/remote_l1_wakeup/`; the earlier stack-linker checks are
 under `build/arche3d/validation/l1_sync/`.
 
-## Shared instruction cache and direct initialization
+## Shared instruction cache and direct initialization (historical)
 
 The per-cluster instruction memories and ELF loaders are removed. One system
 loader writes text/rodata and the initial `.data` image into the first DRAM

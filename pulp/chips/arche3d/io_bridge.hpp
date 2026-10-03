@@ -7,6 +7,6 @@ struct Arche3dIoAccess {
     uint64_t address, size;
     uint8_t *data;
     void *request;
-    bool write, pending = false, error = false;
+    bool pending = false, error = false;
     int64_t latency = 0;
 };

@@ -5,7 +5,7 @@ from elftools.elf.elffile import ELFFile
 import gvsoc.systree as st
 from gvsoc.signature import IoV2SingleReq
 from interco.router import Router
-from utils.loader.loader import ElfLoader
+from pulp.chips.arche3d.dram_image import data_segments, channel_segments
 
 
 def instruction_window(arch):
@@ -14,14 +14,19 @@ def instruction_window(arch):
 
 
 class ProgramImage:
-    """Read ELF metadata once, without creating a loader in every tile."""
+    """Build direct HBM fragments and one shared cache snapshot from the ELF."""
     def __init__(self, arch, binary, initial_pattern=False):
         self.binary = str(Path(binary).resolve()) if binary else None
         self.entry = arch.instruction_base
         self.size = 0
         segments = []
+        self.dram_segments = []
+        self.data_bytes = 0
         if binary:
             with open(self.binary, 'rb') as stream:
+                stream.seek(0, 2)
+                file_length = stream.tell()
+                stream.seek(0)
                 elf = ELFFile(stream)
                 self.entry = elf.header['e_entry']
                 executable = []
@@ -29,16 +34,29 @@ class ProgramImage:
                     if seg['p_type'] != 'PT_LOAD' or seg['p_memsz'] == 0:
                         continue
                     addr, size = seg['p_paddr'], seg['p_memsz']
+                    if seg['p_filesz'] > size or seg['p_offset'] + seg['p_filesz'] > file_length:
+                        raise ValueError('Truncated or invalid ELF load segment')
                     offset = addr - arch.instruction_base
                     if offset < 0 or offset + size > instruction_window(arch):
                         raise ValueError('ELF load segments must be in the shared DRAM program '
                                          'alias; rebuild this binary with arche3d-sw')
                     self.size = max(self.size, offset + size)
                     segments.append((addr, seg['p_offset'], seg['p_filesz'], size))
+                    self.dram_segments.append((arch.dram3d_start_base + offset,
+                        seg['p_offset'], seg['p_filesz'], size))
                     if seg['p_flags'] & 1:
                         executable.append((seg['p_vaddr'], seg['p_vaddr'] + seg['p_filesz']))
                 if not any(start <= self.entry < end for start, end in executable):
                     raise ValueError('ELF entry is outside its executable load segments')
+                data = data_segments(elf, stream, arch.dram3d_start_base,
+                    arch.num_cluster_x * arch.num_cluster_y * arch.dram3d_vault_space,
+                    instruction_window(arch))
+                self.data_bytes = sum(s[3] for s in data)
+                self.dram_segments.extend(data)
+        self.preload_bytes = sum(s[3] for s in self.dram_segments)
+        self.channel_preloads = channel_segments(self.dram_segments, arch.dram3d_start_base,
+            arch.num_cluster_x * arch.num_cluster_y, arch.dram3d_vault_interleave,
+            arch.dram3d_vault_space)
         line = arch.icache_line_size
         # Warm the entry-containing cache-sized window. Larger programs continue
         # with demand refills; small images are fully resident before startup.
@@ -74,13 +92,12 @@ class ProgramImage:
 
 
 class IoBridge(st.Component):
-    """IO v1 ISS/loader to IO_v2 single-request cache/fabric adapter."""
-    def __init__(self, parent, name, arch, read_only=False):
+    """Read-only IO v1 ISS to IO_v2 instruction-cache adapter."""
+    def __init__(self, parent, name, arch):
         super().__init__(parent, name)
         front = st.Component(self, 'v1')
         front.add_sources(['pulp/chips/arche3d/io_bridge.cpp'])
-        front.add_properties(dict(base=arch.instruction_base, size=instruction_window(arch),
-                                  read_only=read_only))
+        front.add_properties(dict(base=arch.instruction_base, size=instruction_window(arch)))
         back = st.Component(self, 'v2')
         back.add_sources(['pulp/chips/arche3d/io_bridge_v2.cpp'])
         self.bind(front, 'request', back, 'request')
@@ -124,7 +141,7 @@ class InstructionCache(st.Component):
         cache = st.Component(self, 'shared')
         cache.add_sources(['pulp/chips/arche3d/logic/icache.cpp'])
         cache.add_properties(dict(size=arch.icache_size, line_size=arch.icache_line_size))
-        bridge = IoBridge(self, 'core_bridge', arch, read_only=True)
+        bridge = IoBridge(self, 'core_bridge', arch)
         bridge.o_OUTPUT(st.SlaveItf(cache, 'input', signature=IoV2SingleReq()))
         for core in range(arch.num_core_per_cluster):
             port = Router(self, f'fetch_{core}', bandwidth=arch.icache_core_width // 8)
@@ -157,12 +174,3 @@ class InstructionCache(st.Component):
 
     def o_FLUSH_ACK(self, itf):
         self.itf_bind('flush_ack', itf, signature='wire<bool>')
-
-
-def system_loader(parent, arch, image, control, cluster):
-    """Exactly one ELF loader, connected through cluster zero's I3D source."""
-    loader = ElfLoader(parent, 'loader', binary=image.binary)
-    bridge = IoBridge(parent, 'loader_bridge', arch)
-    loader.o_OUT(bridge.i_INPUT())
-    bridge.o_OUTPUT(cluster.i_PROGRAM_LOAD())
-    loader.o_START(control.i_IMAGE_LOADED())

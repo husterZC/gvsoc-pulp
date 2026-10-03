@@ -14,7 +14,7 @@ class IoBridgeV2 : public vp::Component {
         auto self = static_cast<IoBridgeV2 *>(block);
         auto req = vp::IoReqAllocator::get(0)->alloc();
         req->prepare(); req->set_addr(a->address); req->set_size(a->size);
-        req->set_data(a->data); req->set_is_write(a->write);
+        req->set_data(a->data); req->set_is_write(false);
         req->initiator = a; req->parent = nullptr; req->burst_id = 0;
         req->is_first = req->is_last = true;
         req->set_second_data(nullptr); req->memcheck_data = nullptr;

@@ -11,7 +11,7 @@ from pulp.chips.arche3d.logic.flex_mesh_noc_v2 import FlexMeshNoCV2
 from pulp.chips.arche3d.arch import load_arch
 from pulp.chips.arche3d.cluster import Arche3dCluster
 from pulp.chips.arche3d.control import Control
-from pulp.chips.arche3d.instructions import ProgramImage, system_loader
+from pulp.chips.arche3d.instructions import ProgramImage
 
 
 class Board(st.Component):
@@ -64,7 +64,8 @@ class Board(st.Component):
             memory = dram_module.DramsysEndpoint(chip, f'dram3d_{terminal}',
                 dram_type=arch.dram3d_type, data_width=arch.i3d_axi_data_width,
                 benchmark_init=memory_init == 'pattern', endpoint_id=terminal,
-                init_size=arch.dram3d_vault_space)
+                init_size=arch.dram3d_vault_space,
+                preload_file=image.binary, preload_segments=image.channel_preloads[terminal])
             network.o_OUTPUT(terminal, memory.i_INPUT())
             narrow = Router(chip, f'control_router_{cluster_id}')
             narrow.o_MAP(control.i_INPUT(cluster_id), base=arch.soc_register_base,
@@ -73,8 +74,6 @@ class Board(st.Component):
             control.o_READY(cluster.i_BOOT_READY())
             control.o_CACHE_PRELOAD(cluster.i_CACHE_PRELOAD())
             cluster.o_CACHE_REFILLS(control.i_CACHE_REFILLS(cluster_id))
-            if cluster_id == 0:
-                system_loader(chip, arch, image, control, cluster)
             cluster.o_WIDE_SOC(data_noc.i_CLUSTER_INPUT(x, y))
             data_noc.o_MAP(cluster.i_WIDE_INPUT(),
                 base=arch.cluster_tcdm_remote + cluster_id * arch.cluster_tcdm_size,

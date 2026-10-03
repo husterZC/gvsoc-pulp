@@ -7,7 +7,7 @@
 #include <deque>
 #include <vector>
 
-// One physical I3D source per cluster. DMA, cache refills and the system loader
+// One physical I3D source per cluster. DMA and instruction-cache refills
 // arbitrate here; every live downstream burst has a distinct AXI ID.
 class I3dPort : public vp::Component {
     struct Transfer {
@@ -18,16 +18,16 @@ class I3dPort : public vp::Component {
         int64_t ready = 0;
         bool error = false;
     };
-    std::array<std::unique_ptr<vp::IoSlave>, 3> inputs;
+    std::array<std::unique_ptr<vp::IoSlave>, 2> inputs;
     vp::IoMaster output;
     vp::WireMaster<uint64_t> cache_refills;
     uint64_t refill_count = 0;
     vp::ClockEvent event;
     vp::Trace trace;
-    std::array<std::deque<Transfer *>, 3> queues;
+    std::array<std::deque<Transfer *>, 2> queues;
     std::deque<Transfer *> finished;
     std::vector<bool> ids;
-    std::array<bool, 3> input_denied{};
+    std::array<bool, 2> input_denied{};
     Transfer *denied = nullptr;
     unsigned turn = 0, next_id = 0;
     int64_t last_offer = -1;
