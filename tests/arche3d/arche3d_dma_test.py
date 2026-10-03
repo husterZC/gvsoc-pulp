@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Small software test fixture; the arche3d production target stays 32 x 32."""
 import importlib
+import os
 import gvsoc.runner
 import gvsoc.systree as st
 from vp.clock_domain import Clock_domain
@@ -10,6 +11,7 @@ from pulp.chips.arche3d.arch import load_arch
 from pulp.chips.arche3d.cluster import Arche3dCluster
 from pulp.chips.arche3d.control import Control
 from pulp.chips.arche3d.instructions import ProgramImage
+from pulp.chips.arche3d.memory import create_memory_endpoint
 from pulp.chips.arche3d.logic.flex_mesh_noc import FlexMeshNoC
 from pulp.chips.arche3d.logic.flex_mesh_noc_v2 import FlexMeshNoCV2
 
@@ -19,12 +21,14 @@ class Board(st.Component):
         super().__init__(parent, name, options=options)
         parser.add_argument('--binary')
         args, _ = parser.parse_known_args()
-        arch = load_arch()
+        config = TargetParameter(self, name='config', value=os.environ.get('ARCHE3D_CONFIG', 'default'),
+            cast=str, description='arche3d configuration name or Python file').get_value()
+        arch = load_arch(config)
         clusters = TargetParameter(self, name='clusters', value=1, cast=int,
             description='Test geometry: 1, 2, or 4 tiles (2 x 2)').get_value()
         if clusters not in (1, 2, 4):
             raise ValueError('The software fixture supports 1, 2, or 4 clusters')
-        # This fixture exercises the production tile, DMA, I3D and DRAMSys models
+        # This fixture exercises the production tile, DMA, I3D and memory models
         # at reduced scale; it is not an alternative architecture config.
         nx, ny = (2, 2) if clusters == 4 else (clusters, 1)
         arch.num_cluster_x, arch.num_cluster_y = nx, ny
@@ -35,10 +39,12 @@ class Board(st.Component):
         control = Control(chip, 'control', arch, 10000, image)
         module = importlib.import_module('pulp.3d_network.interconnect')
         fabric = module.I3dInterconnect(chip, 'i3d', fabric=2, num_x=nx, num_y=ny,
-            axi_addr_width=64, axi_data_width=512, source_contexts=8, memory_contexts=8,
+            io_spill=arch.i3d_io_spill, axi_addr_width=arch.i3d_axi_addr_width,
+            axi_data_width=arch.i3d_axi_data_width, axi_id_width=arch.i3d_axi_id_width,
+            axi_len_width=arch.i3d_axi_len_width, source_contexts=arch.i3d_source_contexts,
+            memory_contexts=arch.i3d_memory_contexts, max_burst_beats=arch.i3d_max_burst_beats,
             memory_base=arch.dram3d_start_base, memory_bytes=arch.dram3d_vault_space,
             interleave_bytes=arch.dram3d_vault_interleave)
-        Dram = importlib.import_module('pulp.3d_network.dramsys_endpoint').DramsysEndpoint
         data_noc = FlexMeshNoCV2(chip, 'noc2d', width=arch.noc2d_link_width // 8,
             nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding)
         sync_noc = FlexMeshNoC(chip, 'sync_noc', width=4, nb_x_clusters=nx,
@@ -57,8 +63,7 @@ class Board(st.Component):
             control.o_CACHE_PRELOAD(tile.i_CACHE_PRELOAD())
             tile.o_CACHE_REFILLS(control.i_CACHE_REFILLS(cluster_id))
             tile.o_I3D_ACTIVITY(control.i_ACTIVITY(cluster_id))
-            memory = Dram(chip, f'dram_{cluster_id}', data_width=512, dram_type=arch.dram3d_type,
-                preload_file=image.binary, preload_segments=image.channel_preloads[terminal])
+            memory = create_memory_endpoint(chip, f'dram_{cluster_id}', arch, terminal, image)
             tile.o_I3D(fabric.i_INPUT(terminal))
             fabric.o_OUTPUT(terminal, memory.i_INPUT())
             tile.o_WIDE_SOC(data_noc.i_CLUSTER_INPUT(x, y))

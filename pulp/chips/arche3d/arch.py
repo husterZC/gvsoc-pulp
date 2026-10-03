@@ -16,6 +16,14 @@ def load_arch(config='default'):
             raise ValueError(f'No arche3d configuration: {config}')
         module = importlib.import_module(f'pulp.chips.arche3d.configs.{config}')
     arch = module.FlexClusterArch()
+    # Older standalone configs retain the existing DRAMSys behavior.
+    arch.dram3d_backend = getattr(arch, 'dram3d_backend', 'dramsys')
+    arch.dram3d_ram_slots = getattr(arch, 'dram3d_ram_slots', 4)
+    if arch.dram3d_backend not in ('dramsys', 'memory'):
+        raise ValueError('dram3d_backend must be dramsys or memory')
+    if (arch.dram3d_backend == 'memory' and
+            (not isinstance(arch.dram3d_ram_slots, int) or arch.dram3d_ram_slots <= 0)):
+        raise ValueError('dram3d_ram_slots must be a positive integer for the memory backend')
     if (arch.num_cluster_x, arch.num_cluster_y) != (32, 32):
         raise ValueError('arche3d currently requires a 32 x 32 logic die')
     if arch.num_core_per_cluster < 2:

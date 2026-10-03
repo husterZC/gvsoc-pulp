@@ -49,6 +49,8 @@ class FlexClusterArch:
         self.i3d_memory_contexts = 8
         self.i3d_max_burst_beats = 256
 
+        self.dram3d_backend = 'dramsys'  # 'dramsys' or 'memory' (built-in RAM)
+        self.dram3d_ram_slots = 4  # MemoryEndpoint only; DRAMSys supplies its own capacity.
         self.dram3d_type = 'hbm4-emu-fast.json'
         self.dram3d_start_base = 0x100000000
         self.dram3d_vault_space = 0x8000000  # 128 MiB per vault

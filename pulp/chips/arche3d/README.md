@@ -90,12 +90,52 @@ The default cluster has 432 KiB of TCDM and a 16 × 32 RedMule array. TCDM bank
 timing prioritizes DMA over RedMule and other HWPE accesses, then core/vector
 accesses. All paths still access the same physical banks.
 
-Each DRAM endpoint uses `hbm4-emu-fast.json` through the existing GVSoC DRAMSys
+By default, `dram3d_backend='dramsys'` selects `pulp.3d_network.dramsys_endpoint`.
+Each endpoint uses `hbm4-emu-fast.json` through the existing GVSoC DRAMSys
 configuration convention. There is no extra memory-read-slot limit: DRAMSys
 supplies memory timing and request capacity. `dram3d_vault_space` is the exposed
 address space per vault, modeled by one DRAMSys channel. It defaults to
 `0x8000000` (128 MiB); `dram3d_vault_interleave` defaults to `0x8000`
 (32 KiB). This exposed space is separate from the DRAMSys memspec capacity.
+
+### Built-in RAM endpoints
+
+Set `dram3d_backend='memory'` to use `pulp.3d_network.memory_endpoint.MemoryEndpoint`
+on every I3D memory port. `dram3d_ram_slots` controls concurrent read bursts
+per RAM endpoint (default 4), independently of `i3d_memory_contexts` in the NoC.
+It is ignored by DRAMSys; `dram3d_type` is ignored by the RAM backend.
+
+Set these fields in your configuration's `FlexClusterArch`, for example in
+[`configs/default.py`](configs/default.py):
+
+```python
+self.dram3d_backend = 'memory'
+self.dram3d_ram_slots = 8
+```
+
+After setting up the Python environment and RISC-V compiler, use the ordinary
+GVSoC environment (`sourceme.sh`) without `SYSTEMC_HOME` set. RAM mode needs
+neither DRAMSys preparation nor SystemC. These commands assume the fields above
+have been set in `configs/default.py`:
+
+```bash
+source sourceme.sh
+export USE_GVRUN=1 USE_GVRUN2=1
+make cfg=default TARGETS=arche3d build
+make cfg=default app=smoke arche3d-sw
+gvrun --target=arche3d --parameter=config=default \
+    --binary=build/arche3d/sw/default/smoke/smoke.elf \
+    --work-dir=build/runs/arche3d_ram_smoke run
+```
+
+Both backends use the same address map, capacity, interleaving, I3D interface,
+ELF/prepared-input loading, and cache initialization. RAM storage allocates host
+pages on writes/preloads; untouched bytes return zero or the selected benchmark
+pattern. Thus the default 128-GiB map does not allocate 128 GiB of host RAM.
+File fragments and zero-fill are applied at time zero, including in pattern mode.
+The endpoint retains its `axi_sim_mem` beat service, backpressure, and read-slot
+timing. It does not model DRAM row buffers, refresh, or controller scheduling,
+so its timing results are not HBM4/DRAMSys measurements.
 
 ## Memory and numbering
 

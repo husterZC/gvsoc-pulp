@@ -40,6 +40,15 @@ another IO_v2 beat endpoint, which then supplies its own timing and capacity.
 Clock the NoC and this endpoint together; insert the engine's clock bridge
 when connecting components in different clock domains.
 
+Internal RAM is sparse: host pages are allocated on writes/preloads, while
+untouched reads return zero or the benchmark pattern. This preserves the
+endpoint's beat timing without allocating its entire logical capacity.
+Optional `preload_file` and `preload_segments` initialize internal RAM at time
+zero. Each segment is `[local_address, file_offset, file_bytes, memory_bytes]`;
+bytes beyond `file_bytes` are zero-filled, overriding any initial pattern.
+Fragments must fit both the file and RAM capacity. Preloading with an external
+backing port bound is rejected; initialize that backing component instead.
+
 ### Parameters
 
 | Python argument | RTL parameter / meaning | Default |
@@ -64,6 +73,7 @@ Memory endpoint parameters:
 | `size` | Local RAM capacity in bytes | 4096 |
 | `read_slots` | Concurrent memory read bursts; `axi_sim_mem.ReadSlots` | 4 |
 | `benchmark_init`, `endpoint_id` | Initialize RAM with the RTL benchmark's byte pattern | `False`, 0 |
+| `preload_file`, `preload_segments` | File and channel-local fragments for direct internal-RAM initialization | `None`, `None` |
 
 `read_slots` belongs to `MemoryEndpoint`. `memory_contexts` belongs to the NoC:
 it limits destination NI transaction contexts, independently of the memory's

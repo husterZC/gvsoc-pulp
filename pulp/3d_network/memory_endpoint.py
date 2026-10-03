@@ -6,7 +6,8 @@ from gvsoc.signature import IoV2Beat, IoV2SingleReq
 
 class MemoryEndpoint(gvsoc.systree.Component):
     def __init__(self, parent, name, *, data_width=64, size=4096, read_slots=4,
-                 benchmark_init=False, endpoint_id=0):
+                 benchmark_init=False, endpoint_id=0,
+                 preload_file=None, preload_segments=None):
         super().__init__(parent, name)
         if data_width < 8 or data_width > 1024 or data_width & (data_width - 1):
             raise ValueError('data_width must be a power of two from 8 to 1024 bits')
@@ -14,7 +15,9 @@ class MemoryEndpoint(gvsoc.systree.Component):
             raise ValueError('size and read_slots must be positive')
         self.data_width = data_width
         self.add_properties(dict(data_width=data_width, size=size, read_slots=read_slots,
-                                 benchmark_init=benchmark_init, endpoint_id=endpoint_id))
+                                 benchmark_init=benchmark_init, endpoint_id=endpoint_id,
+                                 preload_file=str(preload_file) if preload_file else '',
+                                 preload_segments=preload_segments or []))
         self.add_sources(['pulp/3d_network/memory_endpoint.cpp'])
 
     def i_INPUT(self):
@@ -22,9 +25,10 @@ class MemoryEndpoint(gvsoc.systree.Component):
         return gvsoc.systree.SlaveItf(self, 'input', signature=IoV2Beat(self.data_width // 8))
 
     def o_OUTPUT(self, itf):
-        """Optional backing storage. Unbound: use the endpoint's internal RAM.
+        """Optional backing storage. Unbound: use the endpoint's sparse internal RAM.
 
         The backend sees one SingleReq transaction per burst. Its completion
         and latency annotations gate responses in addition to endpoint timing.
+        Direct file preload applies only to internal RAM.
         """
         self.itf_bind('output', itf, signature=IoV2SingleReq())

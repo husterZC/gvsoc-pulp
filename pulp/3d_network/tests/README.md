@@ -13,6 +13,7 @@ installed `gvrun` command and the `network3d*` targets.
 | `hbm4_sweep.py` | B16 context sweep with source/configuration hashes and checked results |
 | `report_hbm4.py` | Format a completed HBM4 sweep as Markdown and CSV, with compressed logs |
 | `kernel_checks.cpp` | Standalone kernel memory-safety and reset checks |
+| `memory_storage_checks.cpp` | Sparse RAM, byte strobes, 64-bit addressing and direct file preload checks |
 
 The benchmark compositions and drivers are in `../benchmarks/`. They are
 independent of these regression scripts. `dramsys_config.py` reads commented
@@ -83,3 +84,16 @@ ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 build/network3d/kernel
 These cover the shared C++ kernels, including crossbar latency, parallel
 throughput, contention, arbitration locks and reset. The GVSoC functional and
 backpressure tests cover the IO_v2 component wrappers.
+
+The RAM storage checks require no GVSoC installation or DRAMSys library:
+
+```bash
+g++ -O1 -g -std=c++17 -fsanitize=address,undefined \
+    -fno-omit-frame-pointer pulp/pulp/3d_network/tests/memory_storage_checks.cpp \
+    -o build/network3d/memory_storage_checks
+ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 build/network3d/memory_storage_checks
+```
+
+These compare randomized unaligned/strobed writes against a dense reference,
+check file fragments and zero-fill over the benchmark pattern, reject invalid
+ranges, and exercise 1,024 logical 128-MiB channels without dense allocation.

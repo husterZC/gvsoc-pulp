@@ -2,7 +2,9 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io_v2.hpp>
 #include "memory_endpoint.hpp"
+#include "memory_storage.hpp"
 #include <cstring>
+#include <fstream>
 #include <unordered_set>
 
 class MemoryEndpoint : public vp::Component {
@@ -21,7 +23,8 @@ class MemoryEndpoint : public vp::Component {
     vp::ClockEvent event;
     int width;
     uint64_t size;
-    std::vector<uint8_t> storage;
+    network3d::MemoryEndpointStorage storage;
+    bool preloaded=false;
     std::unordered_set<Job*> jobs;
     std::vector<Job*> backend_denied;
     Job *writer=nullptr,*read_job=nullptr,*write_job=nullptr;
@@ -48,10 +51,22 @@ class MemoryEndpoint : public vp::Component {
         if (job->address>size || job->data.size()>size-job->address) {
             job->backend.set_resp_status(vp::IO_RESP_INVALID); return;
         }
-        if (job->write) {
-            for (size_t i=0;i<job->data.size();++i)
-                if (job->strobes.empty() || job->strobes[i]) storage[job->address+i]=job->data[i];
-        } else std::memcpy(job->data.data(),storage.data()+job->address,job->data.size());
+        if (job->write) storage.write(job->address,job->data.data(),job->data.size(),
+                                     job->strobes.empty()?nullptr:job->strobes.data());
+        else storage.read(job->address,job->data.data(),job->data.size());
+    }
+    void preload_image(js::Config *config) {
+        auto segments=config->get("preload_segments");
+        if (!segments || segments->get_elems().empty()) return;
+        std::ifstream file(config->get_child_str("preload_file"),std::ios::binary);
+        if (!file) throw std::runtime_error("Cannot open memory preload file");
+        for (auto segment:segments->get_elems()) {
+            auto values=segment->get_elems();
+            if (values.size()!=4) throw std::invalid_argument("Invalid memory preload fragment");
+            storage.preload(file,values[0]->get_int(),values[1]->get_int(),
+                            values[2]->get_int(),values[3]->get_int());
+        }
+        preloaded=true;
     }
     void submit(Job *job) {
         if (!job->submitted) {
@@ -199,16 +214,18 @@ class MemoryEndpoint : public vp::Component {
 public:
     explicit MemoryEndpoint(vp::ComponentConf &conf) : vp::Component(conf),
         timing(get_js_config()->get_child_int("read_slots")),input(request,resp_retry),
-        output(backend_retry,backend_response),event(this,tick) {
-        auto js=get_js_config(); width=js->get_child_int("data_width")/8; size=js->get_child_int("size");
+        output(backend_retry,backend_response),event(this,tick),
+        width(get_js_config()->get_child_int("data_width")/8),size(get_js_config()->get_uint("size")),
+        storage(size,get_js_config()->get_child_bool("benchmark_init"),
+                get_js_config()->get_child_int("endpoint_id")) {
         if (width<1 || width>128 || (width&(width-1)) || !size)
             throw std::invalid_argument("invalid memory endpoint width/size");
-        storage.resize(size);
-        if (js->get_child_bool("benchmark_init")) {
-            int id=js->get_child_int("endpoint_id");
-            for (uint64_t a=0;a<size;++a) storage[a]=(id*17+a*13+(a>>8))&255;
-        }
+        preload_image(get_js_config());
         new_slave_port("input",&input); new_master_port("output",&output);
+    }
+    void start() override {
+        if (preloaded && output.is_bound())
+            throw std::invalid_argument("Memory endpoint preload requires internal RAM; backing output is bound");
     }
     void reset(bool active) override {
         reset_active=active;

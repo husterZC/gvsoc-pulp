@@ -1,10 +1,16 @@
 # arche3d software fixture
 
 This fixture instantiates one, two, or four complete production logic tiles, their
-I3D DMAs, a crossbar, DRAMSys channels, and the production data and sync NoCs.
+I3D DMAs, a crossbar, configurable memory endpoints, and the production data and sync NoCs.
 It defaults to one tile and permits short software checks without elaborating
 all 1,024 tiles. The production `arche3d` target still only supports the
 supplied 32 × 32 geometry.
+
+Memory defaults to DRAMSys. To select the built-in RAM endpoint, set
+`dram3d_backend='memory'` in the selected architecture configuration and adjust
+`dram3d_ram_slots` as needed. Select the same configuration with `cfg` when
+building and the `config` parameter when running, as in the production target. The fixture
+uses the configured memory parameters while retaining its small crossbar geometry.
 
 After the standard GVSoC environment setup, from the top-level repository:
 
@@ -14,6 +20,28 @@ make cfg=default app=smoke arche3d-sw
 gvrun --target=arche3d_dma_test --target-dir=pulp/tests/arche3d \
     --binary=build/arche3d/sw/default/smoke/smoke.elf \
     --work-dir=build/runs/arche3d_dma_smoke run
+```
+
+After setting `dram3d_backend='memory'` in `configs/default.py`, the equivalent
+RAM check needs no DRAMSys/SystemC setup:
+
+```bash
+make cfg=default TARGETS=arche3d_dma_test MODULES="$PWD/pulp/tests/arche3d" build
+make cfg=default app=smoke arche3d-sw
+gvrun --target=arche3d_dma_test --target-dir=pulp/tests/arche3d \
+    --parameter=config=default \
+    --binary=build/arche3d/sw/default/smoke/smoke.elf \
+    --work-dir=build/runs/arche3d_ram_smoke run
+```
+
+Use the same RAM configuration for `queue`, `memory`, `wakeup`, and `icache`;
+select four tiles for the multi-tile tests below. The `icache` check exercises
+timed refills from preloaded RAM while DMA traffic is active. Existing recorded
+DRAMSys cycle counts do not apply to RAM runs. Backend selection and legacy
+configuration compatibility can also be checked without a simulator installation:
+
+```bash
+python pulp/tests/arche3d/test_memory_backend.py
 ```
 
 Use `app=reject_collective` and its ELF for the negative test. It must exit

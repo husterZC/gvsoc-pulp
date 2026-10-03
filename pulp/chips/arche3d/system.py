@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""SoftHier logic die, I3D interconnect die, and distributed DRAMSys channels."""
+"""SoftHier logic die, I3D interconnect, and distributed DRAMSys or RAM endpoints."""
 import importlib
 import os
 import gvsoc.systree as st
@@ -12,6 +12,7 @@ from pulp.chips.arche3d.arch import load_arch
 from pulp.chips.arche3d.cluster import Arche3dCluster
 from pulp.chips.arche3d.control import Control
 from pulp.chips.arche3d.instructions import ProgramImage
+from pulp.chips.arche3d.memory import create_memory_endpoint
 
 
 class Board(st.Component):
@@ -36,7 +37,6 @@ class Board(st.Component):
         control = Control(chip, 'control', arch, progress, image)
         nx, ny = arch.num_cluster_x, arch.num_cluster_y
         network_module = importlib.import_module('pulp.3d_network.interconnect')
-        dram_module = importlib.import_module('pulp.3d_network.dramsys_endpoint')
         network = network_module.I3dInterconnect(chip, 'i3d_interconnect',
             fabric={'fattree': 0, 'mesh': 1, 'xbar': 2}[arch.i3d_fabric], num_x=nx, num_y=ny,
             num_levels=arch.i3d_fabric_level,
@@ -61,11 +61,8 @@ class Board(st.Component):
                 check_pattern=memory_init == 'pattern')
             cluster.o_I3D(network.i_INPUT(terminal))
             cluster.o_I3D_ACTIVITY(control.i_ACTIVITY(cluster_id))
-            memory = dram_module.DramsysEndpoint(chip, f'dram3d_{terminal}',
-                dram_type=arch.dram3d_type, data_width=arch.i3d_axi_data_width,
-                benchmark_init=memory_init == 'pattern', endpoint_id=terminal,
-                init_size=arch.dram3d_vault_space,
-                preload_file=image.binary, preload_segments=image.channel_preloads[terminal])
+            memory = create_memory_endpoint(chip, f'dram3d_{terminal}', arch, terminal,
+                image, benchmark_init=memory_init == 'pattern')
             network.o_OUTPUT(terminal, memory.i_INPUT())
             narrow = Router(chip, f'control_router_{cluster_id}')
             narrow.o_MAP(control.i_INPUT(cluster_id), base=arch.soc_register_base,
