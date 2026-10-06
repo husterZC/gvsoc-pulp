@@ -166,34 +166,3 @@ Python dependencies using:
 python arche3d_sdk/utilities/generate_fp_special_vectors.py
 make -C arche3d_sdk lint
 ```
-
-## Validation results
-
-Validated on 2026-09-27, with `arche3d`, `arche3d_dma_test` and ordinary
-`spatz` built together. The 5/11-cycle latency update was then rebuilt through
-the production-tile fixture; `fp_special`, `fp_formats` and `alltoall` were
-rerun. The four-cluster special-function run exercises
-24 scalar cores and 16 Spatz units: **92,160 scalar** and **61,440 vector
-element** reference comparisons, plus the rounding/ordering/API checks.
-
-| Application | Clusters | Result | Total simulated cycles |
-| --- | ---: | --- | ---: |
-| `fp_special` | 4 | PASS | 204,731 |
-| `fp_formats` | 4 | PASS | 17,029 |
-| `smoke` | 1 | PASS | 127,729 |
-| `memory` | 4 | PASS | 54,783 |
-| `alltoall` | 4 | PASS | 1,107 |
-
-The generated scalar/vector decoders were also checked against the latency
-table, including scalar destination readiness, BF16 sqrt and legacy vector
-exp. The latency-update results are recorded in
-`build/arche3d/validation/special_function_latencies/verification.json`.
-The `smoke` and `memory` rows are from the preceding full validation.
-
-The opcode test, SDK lint and reference regeneration checks pass. All DRAMSys
-endpoints finish with zero pending requests. Existing format, DMA, memory
-and all-to-all regressions retain their previous cycle counts. These are
-small production-tile fixtures; no new full 32 × 32 performance claim is made.
-Logs and machine-readable results are under
-`build/arche3d/validation/special_functions/verification.json` and its sibling
-log files, outside the tracked documentation.

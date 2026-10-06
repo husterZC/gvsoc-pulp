@@ -25,9 +25,9 @@ class Board(st.Component):
             cast=str, description='arche3d configuration name or Python file').get_value()
         arch = load_arch(config)
         clusters = TargetParameter(self, name='clusters', value=1, cast=int,
-            description='Test geometry: 1, 2, or 4 tiles (2 x 2)').get_value()
-        if clusters not in (1, 2, 4):
-            raise ValueError('The software fixture supports 1, 2, or 4 clusters')
+            description='Test geometry: 1, 2, 4 (2 x 2), or 32 tiles (one full row)').get_value()
+        if clusters not in (1, 2, 4, 32):
+            raise ValueError('The software fixture supports 1, 2, 4, or 32 clusters')
         # This fixture exercises the production tile, DMA, I3D and memory models
         # at reduced scale; it is not an alternative architecture config.
         nx, ny = (2, 2) if clusters == 4 else (clusters, 1)
@@ -36,7 +36,9 @@ class Board(st.Component):
         chip = st.Component(self, 'chip')
         clock.o_CLOCK(chip.i_CLOCK())
         image = ProgramImage(arch, args.binary)
-        control = Control(chip, 'control', arch, 10000, image)
+        progress = TargetParameter(self, name='progress_cycles', value=10000, cast=int,
+            description='Progress interval; 0 disables output').get_value()
+        control = Control(chip, 'control', arch, progress, image)
         module = importlib.import_module('pulp.3d_network.interconnect')
         fabric = module.I3dInterconnect(chip, 'i3d', fabric=2, num_x=nx, num_y=ny,
             io_spill=arch.i3d_io_spill, axi_addr_width=arch.i3d_axi_addr_width,
@@ -46,7 +48,8 @@ class Board(st.Component):
             memory_base=arch.dram3d_start_base, memory_bytes=arch.dram3d_vault_space,
             interleave_bytes=arch.dram3d_vault_interleave)
         data_noc = FlexMeshNoCV2(chip, 'noc2d', width=arch.noc2d_link_width // 8,
-            nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding)
+            nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding,
+            l1_base=arch.cluster_tcdm_base)
         sync_noc = FlexMeshNoC(chip, 'sync_noc', width=4, nb_x_clusters=nx,
             nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding,
             router_input_queue_size=arch.noc2d_outstanding, atomics=1, collective=1,
@@ -57,7 +60,9 @@ class Board(st.Component):
             tile = Arche3dCluster(chip, f'cluster_{cluster_id}', arch, cluster_id, image)
             narrow = Router(chip, f'control_router_{cluster_id}')
             narrow.o_MAP(control.i_INPUT(cluster_id), base=arch.soc_register_base,
-                         size=arch.soc_register_size, rm_base=True)
+                         size=0x1000, rm_base=True)
+            narrow.o_MAP(data_noc.i_COLLECTIVE(x, y), base=arch.soc_register_base + 0x1000,
+                size=0x1000, rm_base=True)
             tile.o_NARROW_SOC(narrow.i_INPUT())
             control.o_READY(tile.i_BOOT_READY())
             control.o_CACHE_PRELOAD(tile.i_CACHE_PRELOAD())

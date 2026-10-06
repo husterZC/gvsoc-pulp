@@ -40,24 +40,23 @@ public:
     void reset(bool active) override;
 
     void check();
-    void handle_req(vp::IoReq *req, bool wide, SoftHierCollective collective = {});
+    void handle_req(vp::IoReq *req, bool wide);
     void handle_rsp(SoftHierFloonocReqV2 *req, bool is_address);
 
 private:
-    void enqueue_router_req(vp::IoReq *req, bool is_address, bool wide, bool is_req,
-        SoftHierCollective collective = {});
-    void enqueue_router_rsp(SoftHierFloonocReqV2 *req, bool is_address);
-    void send_router_req();
-    void unstall();
+  void enqueue_router_req(vp::IoReq *req, bool is_address, bool wide, bool is_req);
+  void enqueue_router_rsp(SoftHierFloonocReqV2 *req, bool is_address);
+  void send_router_req();
+  void unstall();
 
-    SoftHierNetworkInterfaceV2 &ni;
-    uint64_t width;
-    // Network this queue injects into (SoftHierNetworkInterfaceV2::NW_*), i.e. which
-    // of the NI's link output ports it drives.
-    int nw;
-    vp::Trace trace;
-    std::queue<SoftHierFloonocReqV2 *> queue;
-    bool stalled;
+  SoftHierNetworkInterfaceV2 &ni;
+  uint64_t width;
+  // Network this queue injects into (SoftHierNetworkInterfaceV2::NW_*), i.e. which
+  // of the NI's link output ports it drives.
+  int nw;
+  vp::Trace trace;
+  std::queue<SoftHierFloonocReqV2 *> queue;
+  bool stalled;
 };
 
 /**
@@ -90,95 +89,102 @@ public:
     SoftHierFloonocReqV2 *unwrap_response(vp::IoReq *req);
 
 private:
-    static void collective_sync(vp::Block *block, SoftHierCollective value);
-    vp::WireSlave<SoftHierCollective> collective_input;
-    SoftHierCollective collective_tag;
-    // Link input callback: a mesh request (or response) delivered by a router.
-    // Returns true when the NI's downstream target denied it (the router must
-    // then stall the corresponding output until unstalled).
-    static bool link_req(vp::Block *__this, SoftHierFloonocReqV2 *req, int nw);
-    // Link output callback: the router accepts injections again on network nw.
-    static void link_unstall(vp::Block *__this, int nw);
-    static vp::IoRespAck wide_response(vp::Block *__this, vp::IoReq *req);
-    static void wide_retry(vp::Block *__this, vp::IoRetryChannel);
-    static vp::IoRespAck narrow_response(vp::Block *__this, vp::IoReq *req);
-    static void narrow_retry(vp::Block *__this, vp::IoRetryChannel);
-    static void wide_response_retry(vp::Block *, vp::IoRetryChannel);
-    static void narrow_response_retry(vp::Block *, vp::IoRetryChannel);
-    void retry_target(bool wide);
-    void retry_response(bool wide);
-    bool deliver_response(bool wide, vp::IoReq *req, int nw);
-    static vp::IoReqStatus narrow_req(vp::Block *__this, vp::IoReq *req);
-    static vp::IoReqStatus wide_req(vp::Block *__this, vp::IoReq *req);
-    vp::IoReqStatus handle_req(vp::IoReq *req, bool wide);
-    // Destination side: build the object forwarded to the local target for one
-    // mesh request flit. Write data flits hand the encapsulated external write
-    // beat itself to the target (ownership travelled with the flit; the target
-    // consumes and frees it under the write-ack contract); reads and atomics
-    // forward the flit itself.
-    vp::IoReq *make_target_req(SoftHierFloonocReqV2 *req);
-    // Destination side: send (or re-send, from a retry) a request built by
-    // make_target_req to the local target and handle the inline outcomes.
-    // Returns true when the target denied it (the caller keeps it in its
-    // stalled slot and stalls the link it came in on).
-    bool send_to_target(vp::IoReq *to_send, bool wide);
-    static void fsm_handler(vp::Block *__this, vp::ClockEvent *event);
-    int get_req_nw(bool is_wide, bool is_write);
-    int get_rsp_nw(bool is_wide, bool is_write);
-    SoftHierEntryV2 *get_entry(uint64_t base, uint64_t size);
+  static void collective_send(vp::Block *, Arche3dCollectiveOffer *);
+  static void collective_ready(vp::Block *, bool);
+  bool collective_deliver(SoftHierFloonocReqV2 *);
+  void trace_collective(const char *event, const Arche3dCollectivePacket &packet);
+  vp::WireSlave<Arche3dCollectiveOffer *> collective_input;
+  vp::WireMaster<Arche3dCollectiveOffer *> collective_output;
+  vp::WireSlave<bool> collective_wakeup;
+  int collective_queued = 0;
+  std::deque<SoftHierFloonocReqV2 *> collective_pending;
+  bool collective_link_stalled = false;
+  // Link input callback: a mesh request (or response) delivered by a router.
+  // Returns true when the NI's downstream target denied it (the router must
+  // then stall the corresponding output until unstalled).
+  static bool link_req(vp::Block *__this, SoftHierFloonocReqV2 *req, int nw);
+  // Link output callback: the router accepts injections again on network nw.
+  static void link_unstall(vp::Block *__this, int nw);
+  static vp::IoRespAck wide_response(vp::Block *__this, vp::IoReq *req);
+  static void wide_retry(vp::Block *__this, vp::IoRetryChannel);
+  static vp::IoRespAck narrow_response(vp::Block *__this, vp::IoReq *req);
+  static void narrow_retry(vp::Block *__this, vp::IoRetryChannel);
+  static void wide_response_retry(vp::Block *, vp::IoRetryChannel);
+  static void narrow_response_retry(vp::Block *, vp::IoRetryChannel);
+  void retry_target(bool wide);
+  void retry_response(bool wide);
+  bool deliver_response(bool wide, vp::IoReq *req, int nw);
+  static vp::IoReqStatus narrow_req(vp::Block *__this, vp::IoReq *req);
+  static vp::IoReqStatus wide_req(vp::Block *__this, vp::IoReq *req);
+  vp::IoReqStatus handle_req(vp::IoReq *req, bool wide);
+  // Destination side: build the object forwarded to the local target for one
+  // mesh request flit. Write data flits hand the encapsulated external write
+  // beat itself to the target (ownership travelled with the flit; the target
+  // consumes and frees it under the write-ack contract); reads and atomics
+  // forward the flit itself.
+  vp::IoReq *make_target_req(SoftHierFloonocReqV2 *req);
+  // Destination side: send (or re-send, from a retry) a request built by
+  // make_target_req to the local target and handle the inline outcomes.
+  // Returns true when the target denied it (the caller keeps it in its
+  // stalled slot and stalls the link it came in on).
+  bool send_to_target(vp::IoReq *to_send, bool wide);
+  static void fsm_handler(vp::Block *__this, vp::ClockEvent *event);
+  int get_req_nw(bool is_wide, bool is_write);
+  int get_rsp_nw(bool is_wide, bool is_write);
+  SoftHierEntryV2 *get_entry(uint64_t base, uint64_t size);
 
-    int ni_outstanding_reqs;
-    // Max input burst size / boundary a burst may not cross (AXI 4KB rule); 0
-    // disables the burst-legality checks.
-    uint64_t max_burst_size;
-    int x;
-    int y;
-    uint64_t narrow_width;
-    uint64_t wide_width;
+  int ni_outstanding_reqs;
+  // Max input burst size / boundary a burst may not cross (AXI 4KB rule); 0
+  // disables the burst-legality checks.
+  uint64_t max_burst_size;
+  int x;
+  int y;
+  uint64_t narrow_width;
+  uint64_t wide_width;
 
-    // Memory map, address range -> mesh position. Every NI holds the full
-    // table (same 'mappings' property on each).
-    std::vector<SoftHierEntryV2> entries;
+  // Memory map, address range -> mesh position. Every NI holds the full
+  // table (same 'mappings' property on each).
+  std::vector<SoftHierEntryV2> entries;
 
-    vp::IoMaster wide_output_itf;
-    vp::IoMaster narrow_output_itf;
-    vp::IoSlave wide_input_itf;
-    vp::IoSlave narrow_input_itf;
+  vp::IoMaster wide_output_itf;
+  vp::IoMaster narrow_output_itf;
+  vp::IoSlave wide_input_itf;
+  vp::IoSlave narrow_input_itf;
 
-    // Pools serving the read response beats delivered upstream to the external
-    // masters (payload co-allocated), indexed by the burst's wide flag:
-    // [0] = narrow_width, [1] = wide_width.
-    vp::IoReqAllocator *rsp_allocator[2];
+  // Pools serving the read response beats delivered upstream to the external
+  // masters (payload co-allocated), indexed by the burst's wide flag:
+  // [0] = narrow_width, [1] = wide_width.
+  vp::IoReqAllocator *rsp_allocator[2];
 
-    // Size-0 (data-less) pools for the per-burst write-ack contract:
-    // - ack_allocator serves the single write burst ack sent upstream to the
-    //   external master once every beat of a burst has its B flit back.
-    // - fwd_wr_allocator serves the destination-side wrapper beats of the
-    //   SPLIT write path only (a beat spread over several W flits keeps its
-    //   buffer alive at the source, so each flit is forwarded wrapped in a
-    //   distinct consumable pool beat). A 1:1 beat (owns_beat) needs no
-    //   wrapper: the encapsulated external beat itself is handed out.
-    vp::IoReqAllocator *ack_allocator;
-    vp::IoReqAllocator *fwd_wr_allocator;
+  // Size-0 (data-less) pools for the per-burst write-ack contract:
+  // - ack_allocator serves the single write burst ack sent upstream to the
+  //   external master once every beat of a burst has its B flit back.
+  // - fwd_wr_allocator serves the destination-side wrapper beats of the
+  //   SPLIT write path only (a beat spread over several W flits keeps its
+  //   buffer alive at the source, so each flit is forwarded wrapped in a
+  //   distinct consumable pool beat). A 1:1 beat (owns_beat) needs no
+  //   wrapper: the encapsulated external beat itself is handed out.
+  vp::IoReqAllocator *ack_allocator;
+  vp::IoReqAllocator *fwd_wr_allocator;
 
-    // Shared pool of SoftHierFloonocReqV2 mesh flits (see SoftHierFloonocReqV2Allocator),
-    // replacing bare new/delete on the flit lifecycle.
-    SoftHierFloonocReqV2Allocator *flit_allocator;
+  // Shared pool of SoftHierFloonocReqV2 mesh flits (see SoftHierFloonocReqV2Allocator),
+  // replacing bare new/delete on the flit lifecycle.
+  SoftHierFloonocReqV2Allocator *flit_allocator;
 
-    // Initiator side, per-burst write tracking (io_v2 write-acknowledgement):
-    // incoming write beats travel the mesh inside their W flit and are
-    // consumed and freed by the destination target; the B flits carry the
-    // accounting back and the burst is acknowledged upstream exactly once,
-    // keyed by burst_id per input port ([0] = narrow, [1] = wide). A lone
-    // beat with burst_id == -1 bypasses the map (it completes on its own B).
-    struct WrTrack
-    {
-        uint64_t issued_bytes = 0;
-        uint64_t acked_bytes = 0;
-        bool seen_last = false;
-        bool error = false;
-        void *initiator = nullptr;
-        uint64_t base = 0;
+  // Initiator side, per-burst write tracking (io_v2 write-acknowledgement):
+  // incoming write beats travel the mesh inside their W flit and are
+  // consumed and freed by the destination target; the B flits carry the
+  // accounting back and the burst is acknowledged upstream exactly once,
+  // keyed by burst_id per input port ([0] = narrow, [1] = wide). A lone
+  // beat with burst_id == -1 bypasses the map (it completes on its own B).
+  struct WrTrack
+  {
+      uint64_t issued_bytes = 0;
+      uint64_t acked_bytes = 0;
+      bool seen_last = false;
+      bool error = false;
+      void *initiator = nullptr;
+      uint64_t base = 0;
     };
     std::map<int64_t, WrTrack> wr_bursts[2];
 

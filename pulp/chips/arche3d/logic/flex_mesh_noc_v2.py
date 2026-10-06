@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""SoftHier-local FlooNoC v2 with legacy IO and collective DMA support."""
+"""FlooNoC v2 unicast IO with native two-sided collective endpoints."""
 import gvsoc.systree as st
 from gvsoc.signature import IoV2Beat
 from pulp.chips.arche3d.logic.floonoc_v2.floonoc_v2 import FlooNocV2ClusterGridNarrowWide
@@ -24,9 +24,6 @@ class NocBridge(st.Component):
                       signature=self.input_signature, composite_bind=True)
         target.itf_bind('output', st.SlaveItf(self, 'output', signature=self.output_signature),
                         signature=self.output_signature)
-        if legacy_input:
-            faces['v2'].itf_bind('collective', st.SlaveItf(self, 'collective',
-                signature='wire<SoftHierCollective>'), signature='wire<SoftHierCollective>')
 
     @property
     def input_signature(self):
@@ -45,7 +42,7 @@ class NocBridge(st.Component):
 
 class FlexMeshNoCV2(FlooNocV2ClusterGridNarrowWide):
     def __init__(self, parent, name, width, nb_x_clusters, nb_y_clusters,
-                 ni_outstanding_reqs=64, router_input_queue_size=2, narrow_width=8):
+                 ni_outstanding_reqs=64, router_input_queue_size=2, narrow_width=8, l1_base=0):
         for label, value in (('wide width', width), ('narrow width', narrow_width)):
             if not isinstance(value, int) or value <= 0 or value & (value-1):
                 raise ValueError(f'{label} must be a positive power of two in bytes')
@@ -58,14 +55,14 @@ class FlexMeshNoCV2(FlooNocV2ClusterGridNarrowWide):
         self.add_property('backend', 'floonoc_v2')
         self.add_property('width', width)  # Common benchmark configuration metadata.
         self.width, self.capacity = width, ni_outstanding_reqs
+        self.l1_base = l1_base
         self.ingress = {}
+        self.collective_endpoints = {}
+        self.nx, self.ny = nb_x_clusters, nb_y_clusters
         for y in range(nb_y_clusters):
             for x in range(nb_x_clusters):
                 bridge = NocBridge(self, f'ingress_{x+1}_{y+1}', width, self.capacity, True)
                 bridge.o_OUTPUT(super().i_CLUSTER_WIDE_INPUT(x, y))
-                bridge.itf_bind('collective', st.SlaveItf(self._fabric._nis[x+1, y+1][0],
-                    'collective', signature='wire<SoftHierCollective>'),
-                    signature='wire<SoftHierCollective>')
                 self.ingress[x, y] = bridge
                 self.itf_bind(f'legacy_input_{x+1}_{y+1}', bridge.i_INPUT(),
                               signature='io', composite_bind=True)
@@ -75,7 +72,26 @@ class FlexMeshNoCV2(FlooNocV2ClusterGridNarrowWide):
         # Exactly one v2 master (the bridge) is bound to each NI input.
         return st.SlaveItf(self, f'legacy_input_{x+1}_{y+1}', signature='io')
 
+    def i_COLLECTIVE(self, x, y):
+        return st.SlaveItf(self, f'collective_{x+1}_{y+1}', signature='io')
+
     def o_MAP(self, itf, base, size, x, y):
+        endpoint = st.Component(self, f'collective_endpoint_{x}_{y}')
+        endpoint.add_sources(['pulp/chips/arche3d/logic/floonoc_v2/collective_endpoint.cpp'])
+        endpoint.add_properties(dict(x=x-1, y=y-1, nx=self.nx, ny=self.ny,
+            width=self.width, l1_size=size, l1_base=self.l1_base))
+        self.collective_endpoints[x-1, y-1] = endpoint
+        self.itf_bind(f'collective_{x}_{y}', st.SlaveItf(endpoint, 'input', signature='io'),
+            signature='io', composite_bind=True)
+        endpoint.itf_bind('memory', st.SlaveItf(self, f'legacy_target_{x}_{y}', signature='io'),
+            signature='io')
+        ni = self._fabric._nis[x, y][0]
+        endpoint.itf_bind('send', st.SlaveItf(ni, 'collective_send',
+            signature='wire<Arche3dCollectiveOffer*>'), signature='wire<Arche3dCollectiveOffer*>')
+        ni.itf_bind('collective_receive', st.SlaveItf(endpoint, 'receive',
+            signature='wire<Arche3dCollectiveOffer*>'), signature='wire<Arche3dCollectiveOffer*>')
+        endpoint.itf_bind('ready', st.SlaveItf(ni, 'collective_ready',
+            signature='wire<bool>'), signature='wire<bool>')
         bridge = NocBridge(self, f'egress_{x}_{y}', self.width, self.capacity, False)
         port = f'legacy_target_{x}_{y}'
         bridge.o_OUTPUT(st.SlaveItf(self, port, signature='io'))

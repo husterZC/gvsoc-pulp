@@ -1,10 +1,14 @@
 # arche3d
 
 `arche3d` combines the SoftHier logic tile with an I3D interconnect die and a
-distributed DRAM die. The initial architecture supports **32 × 32 clusters**.
+distributed DRAM die. The default architecture uses **32 × 32 clusters**.
 Each cluster has six Snitch cores, four Spatz vector units, RedMule, banked L1,
 the existing logic-die DMA, and a dedicated I3D DMA on **core 4 (`n-2`)**.
 Core 5 (`n-1`) is the SDK's designated logic-die DMA core.
+
+Record model changes in [CHANGELOG.md](CHANGELOG.md). Update both model and SDK
+changelogs when their shared interface changes, and keep architecture guides
+and measurements aligned with the current implementation.
 
 The logic-die models are an independent source copy in [`logic/`](logic/README.md).
 The tile, core extensions, DMA frontend/middle-end, memory, accelerators, and
@@ -21,6 +25,9 @@ flowchart BT
     PE --> IC[Shared 32-KiB instruction cache]
     PE --> DMA2[Logic-die DMA]
     DMA2 <--> Mesh[1024-bit 2D NoC]
+    PE --> COL[Native collective endpoint]
+    COL <--> Mesh
+    COL <--> L1
     PE --> DMA3[I3D DMA on core n-2]
     DMA3 <--> L1
   end
@@ -149,6 +156,7 @@ so its timing results are not HBM4/DRAMSys measurements.
 | Wakeup command | `0x50000000`, 4 B | Multicast notification over the sync NoC |
 | Program alias | `0x80000000`, 32 MiB | RV32 read/execute alias, shared 32-KiB cache per cluster |
 | System registers | `0x90000000`, 64 KiB | Runtime control |
+| Collective endpoint | `0x90001000`, 4 KiB within system register window | Per-cluster native send/receive slots |
 | 3D DRAM | `0x100000000`, 128 GiB total | 128 MiB per vault, 32-KiB interleaving |
 | Shared program in DRAM | `0x100000000`–`0x101ffffff` | First stripe, one ELF image for the system |
 | Application DRAM | `0x102000000`–`0x20ffffffff` | All stripes after the program; 128 MiB minus 32 KiB per vault |
@@ -308,7 +316,7 @@ cache implementation.
 
 ## DMA contract
 
-The new DMA uses the local copies of the XDMA frontend and sparse/2D middle-end. A separate
+The I3D DMA uses local copies of the XDMA frontend and sparse/2D middle-end. A separate
 backend tracks each row, burst, buffer, and L1 completion. Its external port is
 `IoV2SingleReq`; IO_v1 remains inside the existing logic tile. The two protocols
 have different C++ request types, so two components exchange an owned descriptor
@@ -326,16 +334,49 @@ The I3D DMA supports L1↔DRAM 1D/2D copies and sparse gathers. Packed unsigned
 8/16/32/64-bit indices reside in L1, start on an 8-byte boundary, and use a
 power-of-two source stride. Descriptor settings are snapshotted at launch;
 completion IDs retire in descriptor order even if bursts return out of order.
-Collective operations are rejected with a fatal diagnostic before entering I3D.
-The logic-die DMA retains its existing collective capability and interfaces.
-Its inherited DMA collective row/column masks remain 16 bits. The separate
-sync-NoC wakeup multicast uses 32-bit destination bitmaps for the full grid.
+Collectives use a native endpoint attached to each data-NoC interface.
+Its MMIO window is `soc_register_base + 0x1000`, with 16 independent slots.
+Participants post local receives and push local contributions; sends complete
+after all source bytes are captured locally and receives after all their L1
+writes. Routers replicate multicast outward and reduce contributions inward
+within their two-cycle pipeline. X/Y coordinate-match masks are carried in the native
+descriptor and packet: zero is a wildcard, and set bits match the root.
+Sparse selections and groups spanning both axes are supported. Excluded
+clusters forward traffic without supplying local operands or receiving data.
+Ordinary DMA and collectives use separate command interfaces.
+One bulk descriptor streams an entire local L1 buffer in 128-byte beats at
+the default 1024-bit link width, with an exact partial tail. Beats carry their
+byte offset and total length under one slot/epoch. Shared eight-beat read and
+write windows issue up to one L1 read and one L1 write per cycle, honoring real
+memory latency and contention. Reductions match offsets as well as group and
+epoch; successive results can advance every cycle. Finite NI/router buffers
+apply backpressure, without a receiver ACK tree.
+
+Full-row/full-column barriers use controller offsets `0x114`/`0x118`, with
+independent group generations and release one cycle after the last arrival.
+They do not drain transfers: wait for local send/receive completion first.
+Masked groups use per-cluster mask configuration at `0x11c` and a blocking
+arrival at `0x120`, with the same one-cycle release after the selected arrivals.
+The separate sync-NoC wakeup interface retains its 32-bit destination bitmaps.
+See [native collective validation](../../../tests/arche3d_collectives/README.md)
+and the [SDK programming guide](../../../../arche3d_sdk/docs/bare_metal_programming.md#72-native-collective-endpoints)
+for the API and timing contract. That guide is the shared reference for
+coordinate masks, slot ownership and completion semantics.
+
+The SDK [row size sweep](../../../../arche3d_sdk/apps/collective_row_sweep/README.md)
+tests midpoint multicast and FP8 E4M3 sum at 1–8192 bytes per group, with one
+32-cluster, two concurrent 16-cluster, or four concurrent 8-cluster groups.
+Their X match masks are `0`, `0x10`, and `0x18`; Y mask `0x1f` fixes the row.
+Their midpoint distance terms are 32, 16 and 8 mesh cycles. The benchmark
+reports whole-buffer software and NI timing separately from these hop-distance
+terms. An uncontended ready stream has NI latency `2 * max_hops + 2 + beats - 1`;
+software setup, local completion polling and barriers cost additional cycles.
 
 ## Shared floating-point arithmetic
 
 Scalar Snitch, Spatz, RedMule and data-NoC reductions share GVSoC FlexFloat
 for FP16, BF16, FP8 E5M2 and FP8 E4M3. The data NoC supports sum/max in each
-format with a one-cycle reduction/join stage. RedMule rounds each fused MAC
+format within the two-cycle forwarding/reduction pipeline. RedMule rounds each fused MAC
 to an **FP32 accumulator**, retaining its 32-bit state across internal tiles
 before converting once to the selected FP16/BF16/FP8 output format.
 NoC/RedMule use RNE independently of CPU rounding CSRs.
@@ -344,7 +385,7 @@ semantics, SDK APIs and reproducible cross-unit tests.
 
 ## Software and benchmark
 
-The separate `arche3d_sdk` submodule contains a new bare-metal runtime, startup,
+The separate `arche3d_sdk` submodule contains the bare-metal runtime, startup,
 generated linker map, DMA API, and applications. Its runtime initializes BSS,
 assigns stacks, copies local initialized data, synchronizes local cores, reports traps and exit status, and
 waits for every cluster to finish. The system-register barrier is a control
@@ -368,8 +409,9 @@ queued DMA requests; it does not count only occupied fabric source contexts.
 L1 drain, polling and completion reporting after the global start barrier.
 `total_cycles` also includes boot. `wall_seconds` is the simulation interval;
 use `/usr/bin/time` around `gvrun` to include Python elaboration and model loading.
-The earlier 45,544.5-cycle result is a comparison point, not a programmed delay
-or a pass threshold. See [validation.md](doc/validation.md) for measurements.
+Cycle counts depend on the selected configuration and workload; the model
+does not impose a benchmark target. See [validation.md](doc/validation.md)
+for current coverage and reproduction commands.
 
 The `smoke` application checks DRAM writes/reads, sparse gathers at all four
 index widths, and byte-unaligned page-crossing reads. `reject_collective` is an
@@ -384,3 +426,6 @@ tests without constructing the full chip. Its two- or four-tile mode also runs `
 which checks all core stacks, data/BSS initialization, and direct remote L1
 loads, stores, and atomics. Its four-tile mode also runs `wakeup` to check
 selective multicast, queued notifications, and blocked receivers.
+Its 32-tile mode forms one complete 32x1 row for the collective size sweep.
+Fixture measurements identify their reduced geometry; default full-chip
+measurements use `--target=arche3d --parameter=config=default`.

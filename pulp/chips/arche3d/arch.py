@@ -26,6 +26,8 @@ def load_arch(config='default'):
         raise ValueError('dram3d_ram_slots must be a positive integer for the memory backend')
     if (arch.num_cluster_x, arch.num_cluster_y) != (32, 32):
         raise ValueError('arche3d currently requires a 32 x 32 logic die')
+    if arch.soc_register_size < 0x2000:
+        raise ValueError('System register window must include control and collective MMIO (8 KiB)')
     if arch.num_core_per_cluster < 2:
         raise ValueError('arche3d requires separate I3D and logic-die DMA cores')
     if arch.num_core_per_cluster - 2 in arch.spatz_attaced_core_list:

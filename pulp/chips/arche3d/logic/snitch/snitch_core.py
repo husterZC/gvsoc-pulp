@@ -105,7 +105,6 @@ def add_latencies(isa, is_fast=False, use_spatz=False):
 isa_instances = {}
 
 def add_arche3d_includes(isa, redmule: bool=False):
-    isa.add_include('<pulp/chips/arche3d/logic/snitch/xdma_legacy.hpp>')
     if redmule:
         isa.add_include('<pulp/chips/arche3d/logic/snitch/redmule_legacy.hpp>')
 
@@ -183,7 +182,6 @@ class Snitch(cpu.iss.riscv.RiscvCommon):
             "cpu/iss/src/gdbserver.cpp",
             "cpu/iss/src/dbg_unit.cpp",
             "cpu/iss/flexfloat/flexfloat.c",
-            "pulp/chips/arche3d/logic/snitch/xdma_legacy.cpp",
             "pulp/chips/arche3d/logic/snitch/redmule_legacy.cpp",
         ])
 
@@ -329,7 +327,6 @@ class SnitchFast(cpu.iss.riscv.RiscvCommon):
             "cpu/iss/src/gdbserver.cpp",
             "cpu/iss/src/dbg_unit.cpp",
             "cpu/iss/flexfloat/flexfloat.c",
-            "pulp/chips/arche3d/logic/snitch/xdma_legacy.cpp",
             "pulp/chips/arche3d/logic/snitch/redmule_legacy.cpp",
         ])
 
@@ -507,7 +504,6 @@ class Snitch_fp_ss(cpu.iss.riscv.RiscvCommon):
             "cpu/iss/src/gdbserver.cpp",
             "cpu/iss/src/dbg_unit.cpp",
             "cpu/iss/flexfloat/flexfloat.c",
-            "pulp/chips/arche3d/logic/snitch/xdma_legacy.cpp",
         ])
 
         if inc_spatz:

@@ -23,9 +23,6 @@
 #include <vector>
 #include <vp/vp.hpp>
 
-#define ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-
-
 
 /**
  * @brief iDMA transfer
@@ -55,12 +52,6 @@ public:
     uint64_t index_addr = 0;
     uint32_t index_width = 0;
     uint32_t transfer_id = 0;
-#ifdef ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-    // Transfer collective type
-    uint64_t collective_type;
-    uint16_t collective_row_mask;
-    uint16_t collective_col_mask;
-#endif //ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
 
     // Free rom for additional information
     std::vector<uint64_t> data;
@@ -77,7 +68,6 @@ public:
     // this field is set in the bursts to the parent transfer
     IdmaTransfer *parent;
 };
-
 
 
 class IdmaTransferProducer;
@@ -108,7 +98,6 @@ public:
      */
     virtual bool can_accept_transfer() = 0;
 };
-
 
 
 /**

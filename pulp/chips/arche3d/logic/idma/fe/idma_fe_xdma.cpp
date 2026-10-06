@@ -40,8 +40,6 @@ IDmaFeXdma::IDmaFeXdma(vp::Component *idma, IdmaTransferConsumer *me)
     this->me = me;
     auto gather = idma->get_js_config()->get("gather_enable");
     this->gather_enable = gather && gather->get_bool();
-    auto collective = idma->get_js_config()->get("collective_enable");
-    this->collective_enable = !collective || collective->get_bool();
 
     // Declare our own trace so that we can individually activate traces
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
@@ -109,20 +107,13 @@ void IDmaFeXdma::offload_sync(vp::Block *__this, IssOffloadInsn<uint32_t> *insn)
             }
             break;
         case 0b0000011:
-            _this->trace.msg(vp::Trace::LEVEL_TRACE, "Received dmcpy collectve operation (config: 0x%lx, size: 0x%lx)\n",
-                ((insn->opcode >> 20) & 0b11111), insn->arg_a);
-            insn->result = _this->enqueue_copy(0b00000, insn->arg_a, insn->granted, ((insn->opcode >> 20) & 0b11111));
-            break;
         case 0b0000101:
-            _this->collective_row_mask = (insn->arg_b) >> 0;
-            _this->collective_col_mask = (insn->arg_b) >> 16;
-            _this->trace.msg(vp::Trace::LEVEL_TRACE, "Received dmmask operation (row mask: 0x%lx, col mask: 0x%lx)\n", _this->collective_row_mask, _this->collective_col_mask);
-            insn->result = insn->arg_b;
+            _this->trace.fatal("Removed collective XDMA instruction; use the native collective endpoint\n");
             break;
         case 0b0000010:
             _this->trace.msg(vp::Trace::LEVEL_TRACE, "Received dmcpy operation (config: 0x%lx, size: 0x%lx)\n",
                 insn->arg_b, insn->arg_a);
-            insn->result = _this->enqueue_copy(insn->arg_b, insn->arg_a, insn->granted, 0);
+            insn->result = _this->enqueue_copy(insn->arg_b, insn->arg_a, insn->granted);
             break;
         case 0b0000100:
             // _this->trace.msg(vp::Trace::LEVEL_TRACE, "Received dmstat operation (status: 0x%lx)\n",
@@ -149,10 +140,8 @@ uint32_t IDmaFeXdma::get_status(uint32_t status)
 
 
 
-uint32_t IDmaFeXdma::enqueue_copy(uint32_t config, uint32_t size, bool &granted, uint32_t collective_type)
+uint32_t IDmaFeXdma::enqueue_copy(uint32_t config, uint32_t size, bool &granted)
 {
-    if (collective_type && !this->collective_enable && !(this->gather_enable && (config & 4)))
-        this->trace.fatal("Collective DMA is disabled for this iDMA instance\n");
     // Allocate transfer ID
     uint32_t transfer_id = this->next_transfer_id.get();
     this->next_transfer_id.set(transfer_id + 1);
@@ -200,22 +189,6 @@ uint32_t IDmaFeXdma::enqueue_copy(uint32_t config, uint32_t size, bool &granted,
     transfer->index_addr = this->index_addr.get();
     transfer->index_width = this->index_width.get();
     transfer->transfer_id = transfer_id;
-#ifdef ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-    if (gather)
-    {
-        // Gather is a unicast copy. Previously programmed collective masks
-        // remain in the frontend for subsequent legacy collective operations.
-        transfer->collective_type = 0;
-        transfer->collective_row_mask = 0;
-        transfer->collective_col_mask = 0;
-    }
-    else
-    {
-        transfer->collective_type = collective_type;
-        transfer->collective_row_mask = this->collective_row_mask;
-        transfer->collective_col_mask = this->collective_col_mask;
-    }
-#endif //ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
 
     // Only new gather descriptors use this fast path; keep legacy empty-copy
     // handling unchanged. Completion is retired in the original issue order.

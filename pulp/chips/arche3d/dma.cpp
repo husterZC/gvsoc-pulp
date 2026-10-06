@@ -152,8 +152,6 @@ public:
     }
     bool can_accept_transfer() override { return rows.size() < row_capacity; }
     void enqueue_transfer(IdmaTransfer *transfer) override {
-        if (transfer->parent->collective_type)
-            trace.fatal("I3D DMA does not support collective transactions\n");
         bool read = inside(transfer->src, transfer->size, memory_base, memory_size)
                  && inside(transfer->dst, transfer->size, loc_base, loc_size);
         bool write = inside(transfer->src, transfer->size, loc_base, loc_size)

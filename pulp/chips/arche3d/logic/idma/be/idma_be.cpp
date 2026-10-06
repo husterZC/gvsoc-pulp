@@ -22,7 +22,6 @@
 #include "idma_be.hpp"
 
 
-
 IDmaBe::IDmaBe(vp::Component *idma, IdmaTransferProducer *me,
     IdmaBeConsumer *loc_be_read, IdmaBeConsumer *loc_be_write,
     IdmaBeConsumer *ext_be_read, IdmaBeConsumer *ext_be_write)
@@ -44,7 +43,6 @@ IDmaBe::IDmaBe(vp::Component *idma, IdmaTransferProducer *me,
     this->loc_base = idma->get_js_config()->get_int("loc_base");
     this->loc_size = idma->get_js_config()->get_int("loc_size");
 }
-
 
 
 IdmaBeConsumer *IDmaBe::get_be_consumer(uint64_t base, uint64_t size, bool is_read)
@@ -118,23 +116,6 @@ bool IDmaBe::can_accept_transfer()
     return this->current_transfer_size == 0;
 }
 
-#ifdef ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-uint64_t IDmaBe::get_collective_type()
-{
-    return this->current_transfer->parent->collective_type;
-}
-
-uint16_t IDmaBe::get_collective_row_mask()
-{
-    return this->current_transfer->parent->collective_row_mask;
-}
-
-uint16_t IDmaBe::get_collective_col_mask()
-{
-    return this->current_transfer->parent->collective_col_mask;
-}
-#endif //ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-
 
 void IDmaBe::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 {
@@ -187,13 +168,11 @@ void IDmaBe::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 }
 
 
-
 void IDmaBe::update()
 {
     // Check if any action should be taken in the next cycle from the FSM handler
     this->transfer_regulation_event.enqueue();
 }
-
 
 
 // Called by source backend protocol to know if it can send data to be written
@@ -230,7 +209,6 @@ void IDmaBe::write_data(uint8_t *data, uint64_t size)
 }
 
 
-
 // This is called by the destination backend protocol to acknowledged written data
 void IDmaBe::ack_data(uint8_t *data, int size)
 {
@@ -261,7 +239,6 @@ void IDmaBe::ack_data(uint8_t *data, int size)
         }
     }
 }
-
 
 
 void IDmaBe::reset(bool active)

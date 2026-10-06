@@ -48,7 +48,8 @@ class Board(st.Component):
             memory_base=arch.dram3d_start_base, interleave_bytes=arch.dram3d_vault_interleave,
             memory_bytes=arch.dram3d_vault_space)
         data_noc = FlexMeshNoCV2(chip, 'noc2d', width=arch.noc2d_link_width // 8,
-            nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding)
+            nb_x_clusters=nx, nb_y_clusters=ny, ni_outstanding_reqs=arch.noc2d_outstanding,
+            l1_base=arch.cluster_tcdm_base)
         sync_noc = FlexMeshNoC(chip, 'sync_noc', width=4, nb_x_clusters=nx, nb_y_clusters=ny,
             ni_outstanding_reqs=arch.noc2d_outstanding,
             router_input_queue_size=arch.noc2d_outstanding, atomics=1, collective=1,
@@ -66,7 +67,9 @@ class Board(st.Component):
             network.o_OUTPUT(terminal, memory.i_INPUT())
             narrow = Router(chip, f'control_router_{cluster_id}')
             narrow.o_MAP(control.i_INPUT(cluster_id), base=arch.soc_register_base,
-                size=arch.soc_register_size, rm_base=True)
+                size=0x1000, rm_base=True)
+            narrow.o_MAP(data_noc.i_COLLECTIVE(x, y), base=arch.soc_register_base + 0x1000,
+                size=0x1000, rm_base=True)
             cluster.o_NARROW_SOC(narrow.i_INPUT())
             control.o_READY(cluster.i_BOOT_READY())
             control.o_CACHE_PRELOAD(cluster.i_CACHE_PRELOAD())

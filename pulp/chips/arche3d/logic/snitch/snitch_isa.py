@@ -29,12 +29,8 @@ class Xdma(IsaSubset):
             Instr('dmrep',     Format_R  ,   '0000111 ----- ----- 000 00000 0101011'),
             Instr('dmidx', [InReg(0, Range(15, 5)), UnsignedImm(0, Range(20, 5))],
                                           '0001000 ----- ----- 000 00000 0101011'),
-            Instr('dmcpy',     Format_R  ,   '0000011 ----- ----- 000 ----- 0101011'),
-            Instr('dmmask',    Format_R  ,   '0000101 ----- ----- 000 ----- 0101011'),
             Instr('dmcpyi',    Format_I1U,   '0000010 ----- ----- 000 ----- 0101011'),
             Instr('dmstati',   Format_I1U,   '0000100 ----- ----- 000 ----- 0101011'),
-        ], includes=[
-            '<pulp/chips/arche3d/logic/snitch/xdma_legacy.hpp>',
         ])
 
 # Encodings for extended Snitch instruction set

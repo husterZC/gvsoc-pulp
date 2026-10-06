@@ -1,240 +1,576 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
-#include <array>
-#include <vector>
-#include <map>
-#include <unordered_map>
+#include <algorithm>
 #include <cstring>
+#include <deque>
+#include <vector>
 
-// Independent integer/FP16-exact goldens, with real v1 target denial and
-// intentionally reordered completions. Every source shares the same mesh.
+// Exercise real endpoint MMIO, L1 timing, router queues, and unicast contention.
+// Expected values below use integers or exactly representable FP constants;
+// they do not call the implementation's reduction helper.
 class CollectiveProbe : public vp::Component
 {
-public:
-    CollectiveProbe(vp::ComponentConf &config) : vp::Component(config), event(this, &tick)
-    {
-        traces.new_trace("trace", &trace, vp::DEBUG);
-        for (int n = 0; n < 16; ++n)
-        {
-            out[n].set_resp_meth(&response);
-            out[n].set_grant_meth(&grant);
-            new_master_port("out_" + std::to_string(n), &out[n]);
-            mem[n].set_req_meth_muxed(&access, n);
-            new_slave_port("mem_" + std::to_string(n), &mem[n]);
-            data[n].resize(0x10000, 0xa5);
-        }
-    }
-    void reset(bool active) override { if (!active) event.enqueue(); }
-private:
     struct Job
     {
-        vp::IoReq req;
-        std::vector<uint8_t> buffer, expected;
-        std::array<uint64_t, 16> visits{};
-        int root, type, row, col;
-        uint64_t offset, size;
-        bool error, bad_input, subnormal;
+        unsigned slot, column, root, op, epoch, bytes;
+        bool posted = false;
+        bool masked = false;
+        unsigned root_line = 0, x_mask = 0, y_mask = 0;
     };
-    struct Pending { vp::IoReq *req; int node; bool denied; };
-    static void grant(vp::Block *, vp::IoReq *) {}
-    bool selected(Job *j, int n)
+    struct Delayed
     {
-        return ((n % 4) & j->row) == ((j->root % 4) & j->row) &&
-               ((n / 4) & j->col) == ((j->root / 4) & j->col);
-    }
-    static uint16_t half_integer(int value)
+        vp::IoReq *req;
+        int node;
+        int64_t due;
+    };
+    std::vector<vp::IoMaster> control, out;
+    std::vector<vp::IoSlave> memory;
+    std::vector<std::vector<uint8_t>> data;
+    std::vector<vp::IoReq *> writes;
+    std::deque<Delayed> delayed;
+    std::vector<Job> jobs;
+    vp::ClockEvent event;
+    vp::Trace trace;
+    unsigned nx, ny, l1_base, phase = 0, backgrounds = 0;
+    int64_t start = 0;
+    bool stream_perf = false;
+    bool launched = false, delayed_send = false, corrupted = false;
+    uint32_t reg(unsigned node, unsigned slot, unsigned offset, bool write, uint32_t value = 0)
     {
-        uint16_t sign = value < 0 ? 0x8000 : 0;
-        unsigned magnitude = value < 0 ? -value : value;
-        if (!magnitude) return sign;
-        unsigned exponent = 0;
-        while ((1u << (exponent + 1)) <= magnitude) ++exponent;
-        return sign | ((exponent + 15) << 10) | ((magnitude - (1u << exponent)) << (10 - exponent));
-    }
-    uint16_t value(Job *j, int n, uint64_t word)
-    {
-        if (j->subnormal) return 1;
-        switch (j->type)
+        vp::IoReq req;
+        req.init();
+        req.set_addr(slot * 64 + offset);
+        req.set_size(4);
+        req.set_is_write(write);
+        req.set_data(reinterpret_cast<uint8_t *>(&value));
+        if (control[node].req(&req) != vp::IO_REQ_OK)
         {
-            case 2: case 5: return uint16_t(60000 + n * 17 + word % 7);
-            case 3: case 6: return uint16_t(-250 - n * 2 + word % 7);
-            case 4: return half_integer(n + 1 + word % 4);
-            case 7: return half_integer(-n - 1 - int(word % 4));
+            trace.fatal("Collective MMIO failed\n");
         }
-        return 0;
+        return value;
     }
-    void issue(int root, int type, int row, int col, uint64_t offset, unsigned size,
-               bool error=false, bool bad_input=false, bool subnormal=false)
+    unsigned position(const Job &j, unsigned node) { return j.column ? node / nx : node % nx; }
+    unsigned line(const Job &j, unsigned node)
     {
-        auto *j = new Job{};
-        j->root=root; j->type=type; j->row=row; j->col=col; j->offset=offset;
-        j->size=size; j->error=error; j->bad_input=bad_input; j->subnormal=subnormal;
-        // Nonzero destination poison catches accidental seed/double counting.
-        j->buffer.resize(size, 0x5a); j->expected.resize(size);
-        if (type == 1)
+        return j.masked ? j.root_line : (j.column ? node % nx : node / nx);
+    }
+    unsigned length(const Job &j) { return j.column ? ny : nx; }
+    bool member(const Job &j, unsigned node)
+    {
+        if (!j.masked)
         {
-            for (unsigned i=0; i<size; ++i) j->buffer[i] = (i * 37 + root * 13) & 255;
-            j->expected = j->buffer;
-            for (auto &m : data) std::memset(m.data()+offset, 0xa5, size);
+            return true;
         }
-        else if (type >= 8)
+        unsigned rx = j.column ? j.root_line : j.root, ry = j.column ? j.root : j.root_line;
+        return ((node % nx) & j.x_mask) == (rx & j.x_mask) &&
+               ((node / nx) & j.y_mask) == (ry & j.y_mask);
+    }
+    bool root(const Job &j, unsigned node)
+    {
+        return position(j, node) == j.root &&
+               (!j.masked || (j.column ? node % nx : node / nx) == j.root_line);
+    }
+    bool sends(const Job &j, unsigned node)
+    {
+        return member(j, node) && (j.op != 1 || root(j, node));
+    }
+    bool receives(const Job &j, unsigned node)
+    {
+        return member(j, node) && (j.op == 1 || root(j, node));
+    }
+    unsigned source(const Job &j, unsigned node)
+    {
+        return 0x1000 + j.slot * 512 + (j.op == 1 || j.op >= 10 ? 1 : 0) + (node % 7) * 2;
+    }
+    unsigned destination(const Job &j, unsigned node) { return source(j, node) + 0x7000; }
+    uint16_t operand(const Job &j, unsigned pos)
+    {
+        switch (j.op)
         {
-            // Exact goldens independent of the model's math library. A single
-            // nonzero contributor also exposes duplicate or missing delivery.
-            unsigned bytes = type < 10 ? 2 : 1;
-            uint16_t one = subnormal ? 1 : type < 10 ? 0x3f80 : type < 12 ? 0x3c : 0x38;
-            for (unsigned i = 0; i + bytes <= size; i += bytes)
+        case 2:
+        case 5:
+            return 60000 + pos;
+        case 3:
+        case 6:
+            return uint16_t(-32 + int(pos));
+        case 4:
+        case 7:
+            return pos == 0 ? 0x3c00 : 0;
+        case 8:
+        case 9:
+            return pos == 0 ? 0x3f80 : 0;
+        case 10:
+        case 11:
+            return pos == 0 ? 0x3c : 0;
+        default:
+            return pos == 0 ? 0x38 : 0;
+        }
+    }
+    uint16_t expected(const Job &j)
+    {
+        if (j.masked && j.op == 2)
+        {
+            unsigned value = 0;
+            for (unsigned node = 0; node < nx * ny; ++node)
             {
-                for (int n = 0; n < 16; ++n)
+                if (member(j, node))
                 {
-                    uint16_t v = n == root ? one : 0;
-                    std::memcpy(data[n].data() + offset + i, &v, bytes);
+                    value += node + 1;
                 }
-                std::memcpy(j->expected.data() + i, &one, bytes);
             }
+            return uint16_t(value);
+        }
+        unsigned n = length(j);
+        switch (j.op)
+        {
+        case 2:
+            return uint16_t(n * 60000 + n * (n - 1) / 2);
+        case 3:
+            return uint16_t(-32 * int(n) + int(n * (n - 1) / 2));
+        case 5:
+            return 60000 + n - 1;
+        case 6:
+            return uint16_t(-32 + int(n) - 1);
+        default:
+            return operand(j, 0);
+        }
+    }
+    void add(unsigned slot, bool column, unsigned root, unsigned op, unsigned bytes, bool post,
+             bool masked = false, unsigned root_line = 0, unsigned x_mask = 0, unsigned y_mask = 0)
+    {
+        Job j{slot, unsigned(column), root, op, phase * 32 + slot + 1, bytes, post};
+        j.masked = masked;
+        j.root_line = root_line;
+        j.x_mask = x_mask;
+        j.y_mask = y_mask;
+        jobs.push_back(j);
+        for (unsigned node = 0; node < nx * ny; ++node)
+        {
+            unsigned src = source(j, node), dst = destination(j, node);
+            std::fill(data[node].begin() + src - 1, data[node].begin() + src + bytes + 1, 0xa5);
+            std::fill(data[node].begin() + dst - 1, data[node].begin() + dst + bytes + 1, 0xa5);
+            if (op == 1)
+            {
+                for (unsigned b = 0; b < bytes; ++b)
+                {
+                    data[node][src + b] = uint8_t(17 * b + line(j, node) + slot);
+                }
+            }
+            else
+            {
+                uint16_t value = masked ? uint16_t(node + 1) : operand(j, position(j, node));
+                unsigned elem = op >= 10 ? 1 : 2;
+                for (unsigned b = 0; b < bytes; b += elem)
+                {
+                    std::memcpy(&data[node][src + b], &value, elem);
+                }
+            }
+            if (!member(j, node))
+            {
+                continue;
+            }
+            reg(node, slot, 0, true,
+                op | (unsigned(column) << 8) | (unsigned(masked) << 9) | (root << 16));
+            reg(node, slot, 4, true, j.epoch);
+            reg(node, slot, 8, true, l1_base + src);
+            reg(node, slot, 12, true, l1_base + dst);
+            reg(node, slot, 16, true, bytes);
+            if (masked)
+            {
+                reg(node, slot, 28, true, x_mask | (y_mask << 16));
+                reg(node, slot, 44, true, root_line);
+            }
+            if (post && receives(j, node))
+            {
+                reg(node, slot, 20, true, 1);
+            }
+        }
+        for (unsigned node = 0; node < nx * ny; ++node)
+        {
+            if (sends(j, node) && !((phase == 24 || phase == 82) && position(j, node) == 0))
+            {
+                reg(node, slot, 20, true, 2);
+            }
+        }
+    }
+    static vp::IoReqStatus access(vp::Block *block, vp::IoReq *req, int node)
+    {
+        auto *self = static_cast<CollectiveProbe *>(block);
+        if (req->get_addr() + req->get_size() > 0x10000)
+        {
+            return vp::IO_REQ_INVALID;
+        }
+        if (self->phase == 23 || self->phase == 83 || self->phase == 84)
+        {
+            int64_t delay = 7 + (node % 3);
+            if (self->phase >= 83)
+            {
+                delay += static_cast<int64_t>((req->get_addr() / 128) % 7);
+            }
+            self->delayed.push_back({req, node, self->clock.get_cycles() + delay});
+            return self->phase == 84 ? vp::IO_REQ_PENDING : vp::IO_REQ_DENIED;
+        }
+        self->copy(req, node);
+        req->set_latency(2);
+        return vp::IO_REQ_OK;
+    }
+    void copy(vp::IoReq *req, unsigned node)
+    {
+        auto *mem = data[node].data() + req->get_addr();
+        if (req->get_is_write())
+        {
+            std::memcpy(mem, req->get_data(), req->get_size());
         }
         else
         {
-            for (unsigned i=0; i+1<size; i+=2)
-            {
-                unsigned sum=0, maxu=0, count=0;
-                int maxi=-32768, exact=0, maxf=-10000;
-                for (int n=0; n<16; ++n)
-                {
-                    uint16_t v=value(j,n,i/2);
-                    std::memcpy(data[n].data()+offset+i,&v,2);
-                    if (!selected(j,n)) continue;
-                    ++count; sum+=v; maxu=std::max(maxu,unsigned(v));
-                    maxi=std::max(maxi,int(int16_t(v)));
-                    exact+=n+1+(i/2)%4; maxf=std::max(maxf,-n-1-int((i/2)%4));
-                }
-                uint16_t want = subnormal ? count : type<=3 ? uint16_t(sum) :
-                    type==4 ? half_integer(exact) : type==5 ? maxu :
-                    type==6 ? uint16_t(maxi) : half_integer(maxf);
-                std::memcpy(j->expected.data()+i,&want,2);
-            }
-        }
-        j->req.init(); j->req.set_addr(0x30000000ULL + root*0x10000 + offset);
-        j->req.set_size(size); j->req.set_is_write(type==1);
-        j->req.set_data(j->buffer.data());
-        j->req.get_payload()[0]=type;
-        j->req.get_payload()[1]=row;
-        j->req.get_payload()[2]=col;
-        jobs.emplace(&j->req,j);
-        ++issued;
-        auto status=out[root].req(&j->req);
-        if (status==vp::IO_REQ_OK || status==vp::IO_REQ_INVALID)
-        {
-            j->req.status=status;
-            response(this,&j->req);
+            std::memcpy(req->get_data(), mem, req->get_size());
         }
     }
     static void response(vp::Block *block, vp::IoReq *req)
     {
-        auto *self=static_cast<CollectiveProbe *>(block);
-        auto it=self->jobs.find(req);
-        if (it==self->jobs.end()) self->trace.fatal("Duplicate completion\n");
-        auto *j=it->second;
-        if ((req->status==vp::IO_REQ_INVALID)!=j->error)
-            self->trace.fatal("Collective status mismatch type=%d stage=%d\n",j->type,self->stage);
-        if (!j->bad_input)
+        auto *self = static_cast<CollectiveProbe *>(block);
+        if (req->status == vp::IO_REQ_INVALID)
         {
-            for (int n=0;n<16;++n)
+            self->trace.fatal("Contending unicast failed\n");
+        }
+        ++self->backgrounds;
+    }
+    static void grant(vp::Block *, vp::IoReq *) {}
+    void begin()
+    {
+        start = clock.get_cycles();
+        jobs.clear();
+        delayed_send = corrupted = false;
+        if (phase < 8)
+        {
+            bool column = phase / 4;
+            unsigned n = column ? ny : nx;
+            add(0, column, (phase % 4) / 2 ? n / 2 : 0, phase % 2 ? 12 : 1, 1, true);
+        }
+        else if (phase < 20)
+        {
+            unsigned op = phase - 6;
+            bool column = phase & 1;
+            unsigned n = column ? ny : nx;
+            add(0, column, n / 2, op, op >= 10 ? 127 : 128, true);
+        }
+        else if (phase == 20)
+        {
+            add(0, false, nx / 2, 1, 128, false);
+        }
+        else if (phase == 24)
+        {
+            add(0, false, nx / 2, 12, 1, true);
+        }
+        else if (phase < 25)
+        {
+            for (unsigned slot = 0; slot < 16; ++slot)
             {
-                uint64_t expected=self->selected(j,n)?j->size:0;
-                if (j->visits[n]!=expected)
-                    self->trace.fatal("Participant/completion mismatch node=%d bytes=%lu expected=%lu type=%d\n",
-                        n,j->visits[n],expected,j->type);
-                if (j->type==1)
-                    for (unsigned i=0;i<j->size;++i)
-                    {
-                        uint8_t want=self->selected(j,n)?j->expected[i]:0xa5;
-                        if (self->data[n][j->offset+i]!=want)
-                            self->trace.fatal("Broadcast mismatch node=%d byte=%u\n",n,i);
-                    }
-            }
-            if (j->type!=1 && !j->error && j->buffer!=j->expected)
-            {
-                for (unsigned i=0;i<j->size;++i)
-                    if (j->buffer[i]!=j->expected[i])
-                        self->trace.fatal("Reduction mismatch type=%d byte=%u got=%u expected=%u stage=%d\n",
-                            j->type,i,j->buffer[i],j->expected[i],self->stage);
+                bool column = slot & 1;
+                unsigned n = column ? ny : nx;
+                add(slot, column, slot % n, slot % 3 ? 12 : 1, 127, true);
             }
         }
-        self->jobs.erase(it); delete j; ++self->completed;
-        self->event.enqueue();
-    }
-    static vp::IoReqStatus access(vp::Block *block, vp::IoReq *req, int node)
-    {
-        auto *self=static_cast<CollectiveProbe *>(block);
-        if (req->get_addr()+req->get_size()>0x10000) return vp::IO_REQ_INVALID;
-        bool denied=(++self->accesses % 3)==0;
-        uint64_t delay=2+(node*7+req->get_addr()/128*3)%19;
-        if (node==15) delay+=43;
-        self->pending.emplace(self->clock.get_cycles()+delay,Pending{req,node,denied});
-        self->event.enqueue();
-        return denied?vp::IO_REQ_DENIED:vp::IO_REQ_PENDING;
+        else if (phase < 42 || phase == 79)
+        {
+            const unsigned masks[8][2] = {{0, 0xffff}, {0xffff, 0},      {1, 0xffff},  {0xffff, 1},
+                                          {1, 1},      {0xffff, 0xffff}, {0x18, 0x18}, {0, 0}};
+            unsigned first = phase < 41 ? (phase - 25) / 2 : 0;
+            unsigned count = phase < 41 ? 1 : 16;
+            for (unsigned slot = 0; slot < count; ++slot)
+            {
+                unsigned item = (first + slot) % 8;
+                bool column = phase >= 41 && (slot & 1);
+                unsigned rx = item & 1 ? nx - 1 : nx / 2;
+                unsigned ry = item % 3 ? ny / 2 : ny - 1;
+                unsigned op = phase < 41 ? ((phase - 25) & 1 ? 2 : 1) : (slot % 3 ? 2 : 1);
+                add(slot, column, column ? ry : rx, op, phase == 79 ? 256 : 128, true, true,
+                    column ? rx : ry, masks[item][0], masks[item][1]);
+            }
+        }
+        if (phase >= 42 && phase < 66)
+        {
+            const unsigned sizes[] = {128, 256, 129, 2049, 8192, 8193};
+            bool column = ((phase - 42) / 2) & 1;
+            add(0, column, (column ? ny : nx) / 2, (phase & 1) ? 12 : 1, sizes[(phase - 42) / 4],
+                true);
+        }
+        else if (phase >= 66 && phase < 78)
+        {
+            unsigned op = phase - 64;
+            bool column = phase & 1;
+            add(0, column, (column ? ny : nx) / 2, op, op >= 10 ? 511 : 512, true);
+        }
+        else if (phase == 78 || phase == 83 || phase == 84)
+        {
+            for (unsigned slot = 0; slot < 16; ++slot)
+            {
+                bool column = slot & 1;
+                add(slot, column, slot % (column ? ny : nx), slot % 3 ? 12 : 1, 257, true);
+            }
+        }
+        else if (phase == 80 || phase == 81)
+        {
+            add(0, false, nx / 2, 1, phase == 80 ? 8193 : 256, false);
+        }
+        else if (phase == 82)
+        {
+            add(0, false, nx / 2, 12, 8193, true);
+        }
+        if (phase == 23 || phase == 83 || phase == 84)
+        {
+            backgrounds = 0;
+            for (unsigned node = 0; node < nx * ny; ++node)
+            {
+                auto *req = new vp::IoReq();
+                req->init();
+                req->set_addr(0x30000000ULL + ((node + 1) % (nx * ny)) * 0x10000 + 0x6000);
+                req->set_size(128);
+                req->set_is_write(true);
+                std::fill(data[node].begin() + 0x5000, data[node].begin() + 0x5080, uint8_t(node));
+                req->set_data(data[node].data() + 0x5000);
+                writes.push_back(req);
+                auto status = out[node].req(req);
+                if (status == vp::IO_REQ_OK || status == vp::IO_REQ_INVALID)
+                {
+                    req->status = status;
+                    response(this, req);
+                }
+            }
+        }
     }
     static void tick(vp::Block *block, vp::ClockEvent *)
     {
-        auto *self=static_cast<CollectiveProbe *>(block);
-        if (self->clock.get_cycles()>2000000)
-            self->trace.fatal("Collective timeout stage=%d pending_jobs=%zu\n",self->stage,self->jobs.size());
-        while (!self->pending.empty() && self->pending.begin()->first<=self->clock.get_cycles())
+        auto *self = static_cast<CollectiveProbe *>(block);
+        if (!self->launched)
         {
-            auto p=self->pending.begin()->second;
-            self->pending.erase(self->pending.begin());
-            auto *req=p.req;
-            uint64_t offset=req->get_addr(), size=req->get_size();
-            for (auto item:self->jobs)
-            {
-                auto *j=item.second;
-                if (offset>=j->offset && offset+size<=j->offset+j->size) j->visits[p.node]+=size;
-            }
-            if (req->get_is_write()) std::memcpy(self->data[p.node].data()+offset,req->get_data(),size);
-            else std::memcpy(req->get_data(),self->data[p.node].data()+offset,size);
-            req->status=(p.node==15 && offset==0x7f00)?vp::IO_REQ_INVALID:vp::IO_REQ_OK;
-            if (p.denied) req->get_resp_port()->grant(req);
-            req->get_resp_port()->resp(req);
+            self->launched = true;
+            self->begin();
         }
-        if (self->jobs.empty())
+        int64_t now = self->clock.get_cycles();
+        for (auto it = self->delayed.begin(); it != self->delayed.end();)
         {
-            int stage=self->stage++;
-            if (stage==0) self->issue(5,1,0,3,0xff7,8257);
-            else if (stage==1) self->issue(10,1,3,0,0x3001,4103);
-            else if (stage==2) self->issue(9,1,0,0,0x5000,512);
-            else if (stage==3) self->issue(10,1,1,1,0x5800,256);
-            else if (stage==4) self->issue(15,1,3,3,0x5900,256);
-            else if (stage<11) self->issue(5,stage-3,0,0,0x6000,512);
-            else if (stage==11) self->issue(5,4,0,0,0x6000,128,false,false,true);
-            else if (stage==12) self->issue(5,2,0,0,0x7f00,128,true);
-            else if (stage==13)
-                for (int n=0;n<16;++n) self->issue(n,n%7+1,0,0,0x8000+n*0x800,2048);
-            else if (stage==14) self->issue(0,2,0,0,0x4001,1,true,true);
-            else if (stage < 21) self->issue(5,stage-7,0,0,0x6000 + (stage >= 17),stage < 17 ? 512 : 511);
-            else if (stage < 27) self->issue(5,stage-13,1,1,0x6000,128,false,false,true);
-            else if (stage == 27)
-                for (int n=0;n<16;++n) self->issue(n,n%13+1,0,0,0x8000+n*0x800,2048);
-            else if (stage == 28) self->issue(0,8,0,0,0x4001,1,true,true);
-            else
+            if (it->due > now)
             {
-                printf("ARCHE3D_COLLECTIVE_PASS jobs=%u target_beats=%u cycles=%ld masks=1 broadcast=1 all_reductions=1 subnormal=1 concurrent=1 stalls=1 errors=1\n",
-                    self->completed,self->accesses,self->clock.get_cycles());
+                ++it;
+                continue;
+            }
+            auto item = *it;
+            it = self->delayed.erase(it);
+            self->copy(item.req, item.node);
+            item.req->status = vp::IO_REQ_OK;
+            item.req->prepare();
+            item.req->get_resp_port()->grant(item.req);
+            item.req->get_resp_port()->resp(item.req);
+        }
+        if (now - self->start > 10000)
+        {
+            self->trace.fatal("Native collective deadlock phase=%u\n", self->phase);
+        }
+        if ((self->phase == 20 || self->phase == 81) && now - self->start >= 80 && !self->corrupted)
+        {
+            auto &j = self->jobs[0];
+            for (unsigned node = 0; node < self->nx * self->ny; ++node)
+            {
+                if (self->sends(j, node) && !(self->reg(node, 0, 24, false) & 4))
+                {
+                    self->trace.fatal("Multicast send waited for unposted receivers\n");
+                }
+                // The source is reusable as soon as send completion is visible.
+                std::fill(self->data[node].begin() + self->source(j, node),
+                          self->data[node].begin() + self->source(j, node) + j.bytes, 0xee);
+            }
+            self->corrupted = true;
+        }
+        if ((self->phase == 20 || self->phase == 80 || self->phase == 81) &&
+            now - self->start >= 120 && !self->jobs[0].posted)
+        {
+            for (unsigned node = 0; node < self->nx * self->ny; ++node)
+            {
+                self->reg(node, 0, 20, true, 1);
+            }
+            self->jobs[0].posted = true;
+        }
+        if ((self->phase == 24 || self->phase == 82) && now - self->start >= 80 &&
+            !self->delayed_send)
+        {
+            auto &j = self->jobs[0];
+            for (unsigned node = 0; node < self->nx * self->ny; ++node)
+            {
+                if (self->receives(j, node) && (self->reg(node, 0, 24, false) & 8))
+                {
+                    self->trace.fatal("Reduction completed without a contributor\n");
+                }
+                if (self->position(j, node) == 0)
+                {
+                    self->reg(node, 0, 20, true, 2);
+                }
+            }
+            self->delayed_send = true;
+        }
+        bool done = (self->phase != 23 && self->phase != 83 && self->phase != 84) ||
+                    self->backgrounds == self->nx * self->ny;
+        for (auto &j : self->jobs)
+        {
+            for (unsigned node = 0; node < self->nx * self->ny; ++node)
+            {
+                unsigned status = self->reg(node, j.slot, 24, false);
+                done &= (!self->sends(j, node) || (status & 4)) &&
+                        (!self->receives(j, node) || (status & 8));
+            }
+        }
+        if (done)
+        {
+            for (auto &j : self->jobs)
+            {
+                uint32_t first = UINT32_MAX, last = 0;
+                uint16_t want = self->expected(j);
+                for (unsigned node = 0; node < self->nx * self->ny; ++node)
+                {
+                    unsigned dst = self->destination(j, node), elem = j.op >= 10 ? 1 : 2;
+                    if (self->sends(j, node))
+                    {
+                        first = std::min(first, self->reg(node, j.slot, 48, false));
+                    }
+                    if (self->receives(j, node))
+                    {
+                        last = std::max(last, self->reg(node, j.slot, 36, false));
+                    }
+                    if (self->data[node][dst - 1] != 0xa5 ||
+                        self->data[node][dst + j.bytes] != 0xa5)
+                    {
+                        self->trace.fatal("Collective overwrote guards\n");
+                    }
+                    for (unsigned b = 0; b < j.bytes; ++b)
+                    {
+                        uint8_t byte = j.op == 1 ? uint8_t(17 * b + self->line(j, node) + j.slot)
+                                                 : uint8_t(want >> (8 * (b % elem)));
+                        if (!self->receives(j, node))
+                        {
+                            byte = 0xa5;
+                        }
+                        if (self->data[node][dst + b] != byte)
+                        {
+                            self->trace.fatal("Incorrect collective result phase=%u node=%u "
+                                              "byte=%u got=%x expected=%x\n",
+                                              self->phase, node, b, self->data[node][dst + b],
+                                              byte);
+                        }
+                    }
+                }
+                if (self->stream_perf && self->phase >= 42 && self->phase < 66)
+                {
+                    unsigned hops = std::max(j.root, self->length(j) - 1 - j.root);
+                    unsigned beats = (j.bytes + 127) / 128, expected = 2 * hops + 3 + beats - 1;
+                    if (last - first != expected)
+                    {
+                        self->trace.fatal("Unexpected bulk latency phase=%u got=%u expected=%u\n",
+                                          self->phase, last - first, expected);
+                    }
+                    printf("ARCHE3D_NATIVE_STREAM column=%u op=%u bytes=%u beats=%u "
+                           "capture_to_receive=%u\n",
+                           j.column, j.op, j.bytes, beats, last - first);
+                }
+                if (self->phase < 8)
+                {
+                    unsigned hops = std::max(j.root, self->length(j) - 1 - j.root);
+                    if (last - first != 2 * hops + 3)
+                    {
+                        self->trace.fatal("Unexpected isolated collective latency %u expected %u\n",
+                                          last - first, 2 * hops + 3);
+                    }
+                    printf("ARCHE3D_NATIVE_LATENCY column=%u op=%u root=%u hops=%u "
+                           "capture_to_receive=%u mesh_hops=%u\n",
+                           j.column, j.op, j.root, hops, last - first, 2 * hops);
+                }
+                if (self->phase >= 25 && self->phase < 41)
+                {
+                    unsigned hops = 0;
+                    unsigned rx = j.column ? j.root_line : j.root,
+                             ry = j.column ? j.root : j.root_line;
+                    for (unsigned node = 0; node < self->nx * self->ny; ++node)
+                    {
+                        if (self->member(j, node))
+                        {
+                            unsigned x = node % self->nx, y = node / self->nx;
+                            unsigned distance =
+                                (x > rx ? x - rx : rx - x) + (y > ry ? y - ry : ry - y);
+                            hops = std::max(hops, distance);
+                        }
+                    }
+                    if (last - first != 2 * hops + 3)
+                    {
+                        self->trace.fatal("Unexpected masked collective latency %u expected %u\n",
+                                          last - first, 2 * hops + 3);
+                    }
+                    printf("ARCHE3D_NATIVE_MASKED_LATENCY x_mask=%u y_mask=%u op=%u hops=%u "
+                           "capture_to_receive=%u\n",
+                           j.x_mask, j.y_mask, j.op, hops, last - first);
+                }
+            }
+            if ((self->phase == 23 || self->phase == 83 || self->phase == 84))
+            {
+                for (unsigned node = 0; node < self->nx * self->ny; ++node)
+                {
+                    for (unsigned b = 0; b < 128; ++b)
+                    {
+                        if (self->data[node][0x6000 + b] !=
+                            uint8_t((node + self->nx * self->ny - 1) % (self->nx * self->ny)))
+                        {
+                            self->trace.fatal("Contending unicast data mismatch\n");
+                        }
+                    }
+                }
+            }
+            if (++self->phase == 85)
+            {
+                printf("ARCHE3D_NATIVE_COLLECTIVE_RESULT PASS nx=%u ny=%u phases=85\n", self->nx,
+                       self->ny);
                 self->time.get_engine()->quit(0);
                 return;
             }
+            self->begin();
         }
         self->event.enqueue();
     }
-    vp::Trace trace;
-    vp::ClockEvent event;
-    vp::IoMaster out[16];
-    vp::IoSlave mem[16];
-    std::array<std::vector<uint8_t>,16> data;
-    std::unordered_map<vp::IoReq *,Job *> jobs;
-    std::multimap<int64_t,Pending> pending;
-    unsigned stage=0, issued=0, completed=0, accesses=0;
-};
 
+  public:
+    explicit CollectiveProbe(vp::ComponentConf &config) : vp::Component(config), event(this, tick)
+    {
+        nx = get_js_config()->get_uint("nx");
+        ny = get_js_config()->get_uint("ny");
+        l1_base = get_js_config()->get_uint("l1_base");
+        stream_perf = get_js_config()->get("stream_perf")->get_bool();
+        traces.new_trace("trace", &trace, vp::DEBUG);
+        control.resize(nx * ny);
+        out.resize(nx * ny);
+        memory.resize(nx * ny);
+        data.resize(nx * ny);
+        for (unsigned node = 0; node < nx * ny; ++node)
+        {
+            new_master_port("control_" + std::to_string(node), &control[node]);
+            out[node].set_resp_meth(response);
+            out[node].set_grant_meth(grant);
+            new_master_port("out_" + std::to_string(node), &out[node]);
+            memory[node].set_req_meth_muxed(access, node);
+            new_slave_port("mem_" + std::to_string(node), &memory[node]);
+            data[node].resize(0x10000, 0xa5);
+        }
+    }
+    ~CollectiveProbe()
+    {
+        for (auto *req : writes)
+        {
+            delete req;
+        }
+    }
+    void reset(bool active) override
+    {
+        if (!active)
+        {
+            event.enqueue();
+        }
+    }
+};
 extern "C" vp::Component *gv_new(vp::ComponentConf &config) { return new CollectiveProbe(config); }

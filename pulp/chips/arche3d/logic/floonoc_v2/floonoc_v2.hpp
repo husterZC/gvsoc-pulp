@@ -19,12 +19,9 @@
 
 #include <vector>
 #include <array>
-#include <memory>
 #include <vp/vp.hpp>
 #include <vp/itf/io_v2.hpp>
-#include "../noc_bridge.hpp"
-
-struct SoftHierCollectiveJoin;
+#include "collective_types.hpp"
 
 /**
  * Shared definitions of the v2 FlooNoC model.
@@ -43,76 +40,65 @@ struct SoftHierCollectiveJoin;
 class SoftHierFloonocReqV2 : public vp::IoReq
 {
 public:
-    SoftHierCollective collective;
-    // A return flit visits the join where this branch was replicated. Each
-    // visited request router makes a join, so responses retrace the tree.
-    std::shared_ptr<SoftHierCollectiveJoin> collective_parent, collective_fork;
-    int collective_slot = 4;
-    int collective_momentum = 4;
-    int collective_outputs = -1;
-    // Destination position in the mesh
-    int dest_x;
-    int dest_y;
-    // Source NI position in the mesh. On the request path the destination NI
-    // uses it to route the response back; on the response path it is the
-    // position the response is coming back to.
-    int src_x;
-    int src_y;
-    // True if the request is travelling on the response path (back to the
-    // source NI), false on the request path (towards the target).
-    bool is_rsp;
-    // Pointer back to the external IoReq (from the master) that this internal
-    // request belongs to. For a write beat that fits in one W flit (the
-    // common, IoV2Beat-signature'd case) the beat is ENCAPSULATED
-    // (owns_beat): ownership travels with the flit, and the destination NI
-    // hands the beat itself to the local target, which consumes and frees it
-    // (write-ack contract) — on the B return path the pointer is then STALE
-    // and must not be dereferenced (the ack accounting rides in the flit's
-    // own fields: burst_id, initiator, initiator_addr, size). A beat SPLIT
-    // across several W flits (oversized beats do reach the NI: a big-packet
-    // form write is a legal one-beat burst of any size — e.g. from a
-    // collapse adapter, or a beat master with runtime-sized chunks like the
-    // traffic generator — and the entry clamp can split when max_burst_size
-    // is 0) keeps the legacy scheme instead: the beat stays alive — nobody
-    // frees it before its B — its buffer backs all the W flits, and the
-    // source NI frees it when its single B flit returns.
-    vp::IoReq *burst;
-    // True on a W flit that covers its whole beat: the flit carries beat
-    // ownership (see `burst` above). Decided at enqueue time on the source
-    // side, copied onto the B flit for the return-path accounting.
-    bool owns_beat;
-    // True if the request travels on the wide network, false for narrow.
-    bool wide;
-    // True if this is the AR/AW (address) phase of a split request, false if it
-    // is the data phase.
-    bool is_address;
-    // Pre-translation address, used for VCD traces in the routers.
-    uint64_t initiator_addr;
-    // Payload storage for read-response flits. Read burst requests are
-    // data-less (io_v2 beat protocol) and the target's response beats are
-    // pooled objects recycled as soon as they are consumed, so a response
-    // flit must carry its data slice across the mesh by value — like the RTL
-    // chimney's R flits. Write flits keep pointing into the incoming write
-    // beat's buffer and leave this empty: the beat travels inside its W flit
-    // (ownership moved to the flit at GRANT) and stays unfreed until the
-    // destination target consumes it, which keeps the buffer valid exactly
-    // as long as the flit references it.
-    std::vector<uint8_t> payload;
+  Arche3dCollectivePacket collective;
+  int collective_outputs = -1;
+  // Destination position in the mesh
+  int dest_x;
+  int dest_y;
+  // Source NI position in the mesh. On the request path the destination NI
+  // uses it to route the response back; on the response path it is the
+  // position the response is coming back to.
+  int src_x;
+  int src_y;
+  // True if the request is travelling on the response path (back to the
+  // source NI), false on the request path (towards the target).
+  bool is_rsp;
+  // Pointer back to the external IoReq (from the master) that this internal
+  // request belongs to. For a write beat that fits in one W flit (the
+  // common, IoV2Beat-signature'd case) the beat is ENCAPSULATED
+  // (owns_beat): ownership travels with the flit, and the destination NI
+  // hands the beat itself to the local target, which consumes and frees it
+  // (write-ack contract) — on the B return path the pointer is then STALE
+  // and must not be dereferenced (the ack accounting rides in the flit's
+  // own fields: burst_id, initiator, initiator_addr, size). A beat SPLIT
+  // across several W flits (oversized beats do reach the NI: a big-packet
+  // form write is a legal one-beat burst of any size — e.g. from a
+  // collapse adapter, or a beat master with runtime-sized chunks like the
+  // traffic generator — and the entry clamp can split when max_burst_size
+  // is 0) keeps the legacy scheme instead: the beat stays alive — nobody
+  // frees it before its B — its buffer backs all the W flits, and the
+  // source NI frees it when its single B flit returns.
+  vp::IoReq *burst;
+  // True on a W flit that covers its whole beat: the flit carries beat
+  // ownership (see `burst` above). Decided at enqueue time on the source
+  // side, copied onto the B flit for the return-path accounting.
+  bool owns_beat;
+  // True if the request travels on the wide network, false for narrow.
+  bool wide;
+  // True if this is the AR/AW (address) phase of a split request, false if it
+  // is the data phase.
+  bool is_address;
+  // Pre-translation address, used for VCD traces in the routers.
+  uint64_t initiator_addr;
+  // Payload storage for read-response flits. Read burst requests are
+  // data-less (io_v2 beat protocol) and the target's response beats are
+  // pooled objects recycled as soon as they are consumed, so a response
+  // flit must carry its data slice across the mesh by value — like the RTL
+  // chimney's R flits. Write flits keep pointing into the incoming write
+  // beat's buffer and leave this empty: the beat travels inside its W flit
+  // (ownership moved to the flit at GRANT) and stays unfreed until the
+  // destination target consumes it, which keeps the buffer valid exactly
+  // as long as the flit references it.
+  std::vector<uint8_t> payload;
 
-    // Point this flit's data at its own payload, filled from `data`.
-    void set_payload(uint8_t *data, uint64_t size)
-    {
-        this->payload.assign(data, data + size);
-        this->set_data(this->payload.data());
+  // Point this flit's data at its own payload, filled from `data`.
+  void set_payload(uint8_t *data, uint64_t size)
+  {
+      this->payload.assign(data, data + size);
+      this->set_data(this->payload.data());
     }
 };
 
-struct SoftHierCollectiveJoin
-{
-    SoftHierFloonocReqV2 *request;
-    int x, y, pending = 0;
-    std::array<SoftHierFloonocReqV2 *, 5> replies{};
-};
 
 
 /**
@@ -175,9 +161,6 @@ public:
     void free(SoftHierFloonocReqV2 *req)
     {
         req->collective = {};
-        req->collective_parent.reset();
-        req->collective_fork.reset();
-        req->collective_slot = req->collective_momentum = 4;
         req->collective_outputs = -1;
         req->payload.clear();
         req->next = this->first_free;

@@ -35,12 +35,12 @@
  */
 class SoftHierRouterV2 : public vp::Component
 {
-public:
+  public:
     // Direction constants, used as indices for the input/output ports and
     // queues. Must match the _DIRS list in floonoc_v2.py.
     static constexpr int DIR_RIGHT = 0;
     static constexpr int DIR_LEFT = 1;
-    static constexpr int DIR_UP   = 2;
+    static constexpr int DIR_UP = 2;
     static constexpr int DIR_DOWN = 3;
     static constexpr int DIR_LOCAL = 4;
     static constexpr int DIR_NB = 5;
@@ -50,7 +50,7 @@ public:
 
     void reset(bool active);
 
-private:
+  private:
     // Link input callback: push the request into the input queue identified
     // by the port id, return true when the queue went over capacity (the
     // sender must then hold off until unstalled).
@@ -61,9 +61,10 @@ private:
     static void fsm_handler(vp::Block *__this, vp::ClockEvent *event);
     void get_next_router_pos(int dest_x, int dest_y, int &next_x, int &next_y);
     int get_req_queue(int from_x, int from_y);
-    int collective_routes(SoftHierFloonocReqV2 *req);
+    int reduction_output(const Arche3dCollectivePacket &packet);
+    int collective_routes(const Arche3dCollectivePacket &packet);
     bool collective_forward(SoftHierFloonocReqV2 *req, int input, bool *output_full);
-    void collective_reply(SoftHierFloonocReqV2 *req);
+    bool collective_reduce(SoftHierFloonocReqV2 *req, int input);
 
     vp::Trace trace;
     int x;
@@ -75,9 +76,18 @@ private:
     std::array<SoftHierFloonocLinkSlave, DIR_NB> input_ports;
     std::array<SoftHierFloonocLinkMaster, DIR_NB> output_ports;
     vp::ClockEvent fsm_event;
-    // Completed joins arbitrate for the same physical outputs as transit
-    // flits. They cannot jump directly to a parent or bypass link bandwidth.
-    vp::Queue collective_ready;
+    struct Reduction
+    {
+        uint32_t epoch = 0, offset = 0, total_bytes = 0;
+        uint16_t root = 0, line = 0, x_mask = 0, y_mask = 0;
+        uint8_t type = 0;
+        size_t bytes = 0;
+        int mask = 0;
+        std::array<SoftHierFloonocReqV2 *, DIR_NB> inputs{};
+        SoftHierFloonocReqV2 *result = nullptr;
+    };
+    std::array<Reduction, 2 * arche3d_collective::SLOTS> reductions{};
+    unsigned next_reduction = 0;
     int current_queue;
     // Wormhole arbitration: each output, once a packet's head flit wins it,
     // is locked to the winning INPUT port until that input passes the tail

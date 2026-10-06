@@ -195,12 +195,6 @@ void IDmaBeAxi::send_read_burst_to_axi()
 
     // Reinit timings
     req->prepare();
-#ifdef ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-    uint8_t * payload_ptr = req->get_payload();
-    payload_ptr[0] = (uint8_t) this->be->get_collective_type();
-    payload_ptr[1] = (uint8_t) this->be->get_collective_row_mask();
-    payload_ptr[2] = (uint8_t) this->be->get_collective_col_mask();
-#endif
 
     // Send to AXI interface
     vp::IoReqStatus status = this->ico_itf.req(req);
@@ -353,12 +347,6 @@ void IDmaBeAxi::write_data(uint8_t *data, uint64_t size)
     req->set_addr(base);
     req->set_size(size);
     req->set_data(data);
-#ifdef ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-    uint8_t * payload_ptr = req->get_payload();
-    payload_ptr[0] = (uint8_t) this->be->get_collective_type();
-    payload_ptr[1] = (uint8_t) this->be->get_collective_row_mask();
-    payload_ptr[2] = (uint8_t) this->be->get_collective_col_mask();
-#endif //ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
 
     vp::IoReqStatus status = this->ico_itf.req(req);
     if (status == vp::IoReqStatus::IO_REQ_OK)

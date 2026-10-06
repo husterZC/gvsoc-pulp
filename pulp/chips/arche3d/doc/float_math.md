@@ -23,14 +23,13 @@ NoC and RedMule use round-to-nearest, ties-to-even (RNE), and do not update a
 core's `fflags`. Their host floating-point environment is saved and restored
 around computation, so operations cannot inherit or alter another unit's
 rounding or exception state. Compare ordinary CPU arithmetic in `frm=0` for
-bitwise agreement. This change does not extend the CPU backend's rounding-mode
-support. Special functions retain the implementation and accuracy limits in
+bitwise agreement. Special functions use the implementation and accuracy limits in
 [special_functions.md](special_functions.md).
 
 ## Data-NoC reductions
 
-The logic-die DMA supports element-wise sum and maximum in all four formats.
-The legacy five-bit XDMA operation field and bridge sideband use these codes:
+The native data-NoC collective endpoint supports element-wise sum and maximum
+in all four formats. Its MMIO descriptor operation field uses these codes:
 
 | Operation | Sum | Maximum | Element bytes |
 | --- | ---: | ---: | ---: |
@@ -41,32 +40,47 @@ The legacy five-bit XDMA operation field and bridge sideband use these codes:
 | FP8 E5M2 | 10 | 11 | 1 |
 | FP8 E4M3 | 12 | 13 | 1 |
 
-Code 1 remains broadcast. Integer sums wrap at 16 bits. Floating sums round to
+Code 1 selects multicast. Integer sums wrap at 16 bits. Floating sums round to
 the selected element format at each combine; there is no wide accumulator in
 the NoC. Maximum follows scalar RISC-V behavior: one NaN returns the numeric
 operand, two NaNs return canonical NaN, and max(-0, +0) is +0.
 
-A router's reduction/join stage takes **one network cycle** for any of these
-operations. Link traversal, response routing, arbitration and backpressure
-still take their normal time. This is a timing assumption, not an RTL
-calibration, and is not a claim that the whole collective completes in one cycle.
+The two-cycle router pipeline includes matching and reduction. No extra
+join stage or outward request wave is modeled. Contributions are pushed
+from every selected participant toward the root, which posts the result
+receive. The model assumes a full-width datapath meeting that pipeline
+latency; this is an architectural timing assumption, not RTL calibration.
 
-Replies combine in fixed local/right/left/up/down tree order, independently
-of target completion order. Floating sums are not associative: a serial sum
-with a different order can give different bits even using the same library.
+Inputs combine in fixed local/right/left/up/down order, independently of
+arrival timing. Floating sums are not associative: a differently ordered
+serial sum can produce different bits with the same arithmetic library.
 
-The source addresses the initiating cluster's remote-L1 alias; participants
-access the same local offset. Each fragment is limited to a wide-network beat.
-The bridge splits longer DMA transfers. FP16/BF16 addresses and lengths must
-be even; FP8 accepts byte alignment and odd lengths. Match-mask bits constrain
-coordinate bits, not individual destinations. For a 32x32 grid, zero selects
-all coordinates and `0x1f` selects the initiating coordinate in that dimension.
+Each participant provides its own local L1 address. One descriptor streams
+the whole buffer in wide flits (128 bytes by default), including an exact tail.
+FP16/BF16 addresses and lengths must be even, and each beat must hold a complete
+element; FP8 permits odd addresses and lengths. In X/Y coordinate-match masks,
+zero is a wildcard and set bits must match the root.
+Groups can be sparse or span both axes; the root always participates.
+Unselected routers forward/combine selected branches without a local operand.
+All members match slot, epoch, root, masks, operation and byte count.
 
-Use one core to own the logic-die DMA's command registers, normally core n-1.
-The SDK exposes `arche3d_noc_{sum,max}_{fp16,bf16,e5m2,e4m3}`; each returns a
-DMA descriptor ID. Wait with `arche3d_dma_wait(id)` before reading the result
-or modifying contributions. The I3D DMA still rejects all collective commands.
-The sync bus remains for remote scalar L1 access and wakeup multicast.
+The SDK uses `arche3d_collective_prepare_masked` (or the full-row/full-column
+`arche3d_collective_prepare`), `arche3d_collective_post_receive`
+and `arche3d_collective_send`. Send completion permits source reuse after
+local capture; receive completion permits reading the destination after
+all its L1 writes. Group synchronization uses `arche3d_masked_clusters_barrier`
+with the collective's masks, or dedicated full-row/full-column barriers,
+after these local completions. Ordinary DMA and native collectives have separate
+command interfaces. The sync bus still handles scalar remote L1 and wakeup notifications.
+
+The SDK [row size sweep](../../../../../arche3d_sdk/apps/collective_row_sweep/README.md)
+uses E4M3 sum and midpoint roots for contiguous 32/16/8-member groups. Every
+member contributes finite powers of two; the specified tree has exactly
+representable partial sums and independent expected result encodings. Larger
+buffers use one bulk command and epoch, with byte offsets matching successive
+reduction beats. There are no per-beat software issue gaps; finite buffering
+and L1/mesh contention may stall streaming. Router arithmetic remains part of
+each two-cycle hop, with one result beat per cycle when unblocked.
 
 ## RedMule accumulation
 
@@ -77,9 +91,8 @@ All floating-point RedMule modes have an **IEEE binary32 (FP32) accumulator**:
 3. Keep those 32-bit accumulator bits across internal N-tile boundaries.
 4. Convert to the selected output format only after the final term.
 
-Finite FP16, BF16, and FP8 inputs and initial Y widen exactly to FP32. In
-particular, BF16 initial values no longer overflow or underflow merely because
-they lie outside FP16's range. A fused MAC can still overflow or underflow in
+Finite FP16, BF16, and FP8 inputs and initial Y widen exactly to FP32. BF16 initial values
+retain their range when widened to FP32. A fused MAC can still overflow or underflow in
 FP32, and the final conversion is subject to the output format's range and
 precision. For example, BF16 `max_finite * 2 - max_finite` remains finite even
 though the intermediate product would overflow if rounded separately to FP32.
@@ -97,9 +110,8 @@ mode switch or change to the software command interface.
 | 8 | BF16 | FP32 |
 | 9 | FP8 E4M3 | FP32 |
 
-Modes 0–7 preserve their encodings. Mode 8 adds BF16 and mode 9 makes E4M3
-available. Integer modes and the model's transfer/timing state machine are
-unchanged. Only valid matrix terms are evaluated; padded entries must not
+Modes 8 and 9 select BF16 and E4M3. Integer modes use their own
+accumulation rules. Only valid matrix terms are evaluated; padded entries must not
 introduce zero-times-infinity NaNs or change signed zeros.
 
 For a scalar reference, widen X/W and initial Y to FP32, execute the same
@@ -143,27 +155,9 @@ environment isolation is also checked.
 
 `fp_alignment` runs on four production tiles. Every scalar core computes sum,
 max and FMA references; all configured Spatz cores compare vector results. The
-logic DMA issues real two-participant reductions and compares with the scalar
+native endpoint issues two-participant posted reductions and compares with the scalar
 results. RedMule tests cover subnormals, fused rounding, BF16 input/initial-Y
 range, FP16-vs-FP32 accumulation, per-MAC FP32-vs-host-double rounding, and
 preservation of FP32 state across internal tiles.
-The NoC-only test uses a 4x4 mesh, concurrent sources, shallow queues, delayed
-and denied targets, reordered responses, match masks and invalid alignment.
-
-FP32 accumulator validation on 2026-09-27:
-
-| Check | Result |
-| --- | --- |
-| Exact arithmetic oracle | PASS, 914,372 checks |
-| Production `arche3d` and `arche3d_dma_test` builds | PASS |
-| `fp_alignment`, four tiles | PASS, 24 scalar cores and 16 Spatz units; 756,238 cycles |
-| SDK formatting and lint | PASS |
-
-The cross-unit software test includes 147,456 scalar reference operations,
-98,304 scalar/vector comparisons, 16,256 scalar/NoC comparisons and 104 RedMule
-GEMMs across four tiles. RedMule cases also cross M/K tile boundaries and use
-incomplete edge tiles. NoC/RedMule commands are tested with deliberately
-mismatched CPU format and rounding CSRs. Logs and machine-readable results
-are saved under `build/arche3d/validation/fp32_accumulator/` (not tracked).
-These are numerical/functional checks; the full 32x32 all-to-all benchmark
-was not rerun for this arithmetic change.
+The NoC-only test covers configurable meshes through 32x32, concurrent groups,
+shallow queues, delayed receivers/contributors and denied local-memory targets.

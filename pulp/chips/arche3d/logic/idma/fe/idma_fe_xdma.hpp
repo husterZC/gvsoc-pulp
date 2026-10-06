@@ -56,7 +56,7 @@ private:
     // Method for offload interface, called when the core is offloading an xdma instruction
     static void offload_sync(vp::Block *__this, IssOffloadInsn<uint32_t> *insn);
     // Enqueue a transfer using the current values of the registers
-    uint32_t enqueue_copy(uint32_t config, uint32_t size, bool &granted, uint32_t collective_type);
+    uint32_t enqueue_copy(uint32_t config, uint32_t size, bool &granted);
     // Return status
     uint32_t get_status(uint32_t status);
 
@@ -94,12 +94,6 @@ private:
     vp::Signal<bool> do_transfer_grant;
     // In case a transfer was blocked, gives the transfer which was blocked
     IdmaTransfer *stalled_transfer;
-#ifdef ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
-    // Transfer collective
-    bool collective_enable = true;
-    uint16_t collective_row_mask;
-    uint16_t collective_col_mask;
-#endif //ENABLE_DMA_SIMPLE_COLLECTIVE_IMPLEMENTATION
 
     //track iDMA transfer time
     int64_t transfer_start_time;

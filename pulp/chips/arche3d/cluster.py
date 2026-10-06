@@ -26,7 +26,7 @@ class Arche3dCluster(ClusterUnit):
             spatz_core_list=arch.spatz_attaced_core_list, spatz_num_vlsu=arch.spatz_num_vlsu_port,
             spatz_num_fu=arch.spatz_num_function_unit, spatz_vlsu_bw=32, spatz_vreg_gather_eff=100,
             data_bandwidth=arch.noc2d_link_width // 8, idma_gather_enable=True,
-            idma_collective_enable=True, core_model='fast')
+            core_model='fast')
         super().__init__(parent, name, ca, entry=image.entry,
             extra_dma_factory=lambda tile, _: (arch.num_core_per_cluster - 2,
                 I3dDma(tile, 'i3d_dma', arch, check_pattern=check_pattern)),

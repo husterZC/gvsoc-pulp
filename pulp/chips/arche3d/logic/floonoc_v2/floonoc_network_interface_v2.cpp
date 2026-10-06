@@ -60,7 +60,7 @@ void SoftHierNetworkQueueV2::unstall()
     this->ni.fsm_event.enqueue();
 }
 
-void SoftHierNetworkQueueV2::handle_req(vp::IoReq *req, bool wide, SoftHierCollective collective)
+void SoftHierNetworkQueueV2::handle_req(vp::IoReq *req, bool wide)
 {
     this->trace.msg(vp::Trace::LEVEL_DEBUG, "Received %s burst from initiator (burst: %p, offset: 0x%lx, size: 0x%lx, is_write: %d, op: %d)\n",
                      wide ? "wide" : "narrow", req, req->get_addr(), req->get_size(), req->get_is_write(), req->get_opcode());
@@ -76,10 +76,10 @@ void SoftHierNetworkQueueV2::handle_req(vp::IoReq *req, bool wide, SoftHierColle
     // chimney, where the id-less AXI W beats must not interleave), while the
     // address header and any entry-boundary-crossing fragments become their own
     // single-flit packets. Reads (AR) are single-flit and never lock.
-    this->enqueue_router_req(req, true, wide, true, collective);
+    this->enqueue_router_req(req, true, wide, true);
     if (req->get_is_write())
     {
-        this->enqueue_router_req(req, false, wide, true, collective);
+        this->enqueue_router_req(req, false, wide, true);
     }
 }
 
@@ -88,8 +88,8 @@ void SoftHierNetworkQueueV2::handle_rsp(SoftHierFloonocReqV2 *req, bool is_addre
     this->enqueue_router_rsp(req, is_address);
 }
 
-
-void SoftHierNetworkQueueV2::enqueue_router_req(vp::IoReq *req, bool is_address, bool wide, bool is_req, SoftHierCollective collective)
+void SoftHierNetworkQueueV2::enqueue_router_req(vp::IoReq *req, bool is_address, bool wide,
+                                                bool is_req)
 {
     uint64_t burst_base = req->get_addr();
     uint64_t burst_size = req->get_size();
@@ -110,7 +110,6 @@ void SoftHierNetworkQueueV2::enqueue_router_req(vp::IoReq *req, bool is_address,
         uint64_t size = is_address ? burst_size : std::min(this->width, burst_size);
         SoftHierFloonocReqV2 *router_req = this->ni.flit_allocator->alloc();
 
-        router_req->collective = collective;
         router_req->src_x = this->ni.x;
         router_req->src_y = this->ni.y;
         router_req->is_rsp = false;
@@ -177,9 +176,8 @@ void SoftHierNetworkQueueV2::enqueue_router_req(vp::IoReq *req, bool is_address,
         // clamp above) keeps the legacy scheme — its buffer must outlive
         // every flit, so the beat stays unfreed until its B flit returns to
         // the source.
-        router_req->owns_beat = !is_address && req->get_opcode() == vp::WRITE
-            && size == req->get_size() && !collective.type;
-        if (collective.type && !is_address) router_req->set_payload(burst_data, size);
+        router_req->owns_beat =
+            !is_address && req->get_opcode() == vp::WRITE && size == req->get_size();
 
         // Wormhole packet framing by DESTINATION run: a packet may only span
         // flits going to the same mesh position, because it reserves a router
@@ -233,9 +231,6 @@ void SoftHierNetworkQueueV2::enqueue_router_rsp(SoftHierFloonocReqV2 *req, bool 
     router_req->src_x = req->src_x;
     router_req->src_y = req->src_y;
     router_req->is_rsp = true;
-    router_req->collective = req->collective;
-    router_req->collective_parent = req->collective_parent;
-    router_req->collective_slot = req->collective_slot;
     router_req->burst = req->burst;
     router_req->is_address = is_address;
     router_req->wide = req->wide;
@@ -286,7 +281,7 @@ void SoftHierNetworkQueueV2::send_router_req()
     // Keyed on the flit's own copies of is_write/wide: req->burst may only be
     // dereferenced on the request path (a write beat is consumed and freed by
     // the destination target, so it is stale on the B response path).
-    if (!req->is_rsp)
+    if (!req->is_rsp && !req->collective.type)
     {
         int *nb_req;
         if (req->wide)
@@ -309,6 +304,11 @@ void SoftHierNetworkQueueV2::send_router_req()
     this->trace.msg(vp::Trace::LEVEL_DEBUG, "Injecting flit (req: %p, base: 0x%lx, size: 0x%lx, is_write: %d, op: %d, is_rsp: %d)\n",
                     req, req->get_addr(), req->get_size(), req->get_is_write(), req->get_opcode(), req->is_rsp);
 
+    if (req->collective.type)
+    {
+        --this->ni.collective_queued;
+        this->ni.trace_collective("INJECT", req->collective);
+    }
     this->stalled = this->ni.link_out[this->nw].req(req);
     if (this->stalled)
     {
@@ -371,8 +371,11 @@ SoftHierNetworkInterfaceV2::SoftHierNetworkInterfaceV2(vp::ComponentConf &config
         this->new_slave_port(std::string(nw_names[i]) + "_link_in", &this->link_in[i]);
     }
 
-    this->collective_input.set_sync_meth(&SoftHierNetworkInterfaceV2::collective_sync);
-    this->new_slave_port("collective", &this->collective_input);
+    collective_input.set_sync_meth(&SoftHierNetworkInterfaceV2::collective_send);
+    collective_wakeup.set_sync_meth(&SoftHierNetworkInterfaceV2::collective_ready);
+    new_slave_port("collective_send", &collective_input);
+    new_master_port("collective_receive", &collective_output);
+    new_slave_port("collective_ready", &collective_wakeup);
 
     // Every NI receives the full memory map so it can translate addresses to
     // mesh positions on its own.
@@ -560,6 +563,16 @@ void SoftHierNetworkInterfaceV2::narrow_retry(vp::Block *block, vp::IoRetryChann
 
 void SoftHierNetworkInterfaceV2::reset(bool active)
 {
+    if (active)
+    {
+        for (auto *req : collective_pending)
+        {
+            flit_allocator->free(req);
+        }
+        collective_pending.clear();
+        collective_queued = 0;
+        collective_link_stalled = false;
+    }
     this->trace.msg(vp::Trace::LEVEL_TRACE, "Resetting network interface\n");
     if (active)
     {
@@ -635,9 +648,63 @@ vp::IoReqStatus SoftHierNetworkInterfaceV2::wide_req(vp::Block *__this, vp::IoRe
     return _this->handle_req(req, /*wide=*/true);
 }
 
-void SoftHierNetworkInterfaceV2::collective_sync(vp::Block *block, SoftHierCollective value)
+void SoftHierNetworkInterfaceV2::trace_collective(const char *event,
+                                                  const Arche3dCollectivePacket &p)
 {
-    static_cast<SoftHierNetworkInterfaceV2 *>(block)->collective_tag = value;
+    trace.msg(vp::Trace::LEVEL_DEBUG,
+              "COL_%s at=(%d,%d) op=%u column=%d root=%u slot=%u epoch=%u bytes=%zu line=%u "
+              "x_mask=0x%x y_mask=0x%x offset=%u total_bytes=%u\n",
+              event, x - 1, y - 1, p.type, p.column, p.root, p.slot, p.epoch, p.data.size(), p.line,
+              p.x_mask, p.y_mask, p.offset, p.total_bytes);
+}
+
+void SoftHierNetworkInterfaceV2::collective_send(vp::Block *block, Arche3dCollectiveOffer *offer)
+{
+    auto *self = static_cast<SoftHierNetworkInterfaceV2 *>(block);
+    offer->accepted = false;
+    if (self->collective_queued >= self->ni_outstanding_reqs)
+    {
+        return;
+    }
+    auto &p = *offer->packet;
+    if (!arche3d_collective::valid(p.type) || p.data.empty() || p.data.size() > self->wide_width ||
+        p.offset >= p.total_bytes || p.offset % self->wide_width ||
+        p.data.size() != std::min<unsigned>(self->wide_width, p.total_bytes - p.offset) ||
+        p.slot >= arche3d_collective::SLOTS || !p.selects(self->x - 1, self->y - 1))
+    {
+        self->trace.fatal("Invalid native collective packet\n");
+    }
+    auto *req = self->flit_allocator->alloc();
+    req->collective = p;
+    req->wide = true;
+    req->set_size(p.data.size());
+    req->set_is_write(true);
+    req->src_x = self->x;
+    req->src_y = self->y;
+    self->wide_queue.queue.push(req);
+    ++self->collective_queued;
+    offer->accepted = true;
+    self->fsm_event.enqueue();
+}
+
+void SoftHierNetworkInterfaceV2::collective_ready(vp::Block *block, bool)
+{
+    static_cast<SoftHierNetworkInterfaceV2 *>(block)->fsm_event.enqueue();
+}
+
+bool SoftHierNetworkInterfaceV2::collective_deliver(SoftHierFloonocReqV2 *req)
+{
+    Arche3dCollectiveOffer offer{&req->collective};
+    if (!collective_output.is_bound())
+    {
+        trace.fatal("Collective destination has no endpoint\n");
+    }
+    collective_output.sync(&offer);
+    if (offer.accepted)
+    {
+        flit_allocator->free(req);
+    }
+    return offer.accepted;
 }
 
 vp::IoReqStatus SoftHierNetworkInterfaceV2::handle_req(vp::IoReq *req, bool wide)
@@ -662,26 +729,10 @@ vp::IoReqStatus SoftHierNetworkInterfaceV2::handle_req(vp::IoReq *req, bool wide
         cursor += chunk;
         remaining -= chunk;
     }
-    SoftHierCollective collective;
-    if (wide && this->collective_tag.request == req) collective = this->collective_tag;
-    this->collective_tag = {};
-    if (collective.type)
-    {
-        auto *entry = this->get_entry(addr, size);
-        // SDK collectives address the initiating cluster's remote L1 window;
-        // all participants access the same translated local offset. Never
-        // interpret a collective as a multicast HBM operation.
-        unsigned element_bytes = arche3d_collective::element_bytes(collective.type);
-        mapped = mapped && arche3d_collective::valid(collective.type) && entry && entry->x == this->x
-            && entry->y == this->y && size <= this->wide_width
-            && size <= entry->size - (addr - entry->base)
-            && (collective.type == 1 ? req->get_opcode() == vp::WRITE :
-                (req->get_opcode() == vp::READ && addr % element_bytes == 0 && size % element_bytes == 0));
-    }
     if (!mapped)
     {
-        this->trace.msg(vp::Trace::LEVEL_DEBUG,
-            "Rejected request (addr: 0x%lx, size: %lu, collective: %u)\n", addr, size, collective.type);
+        this->trace.msg(vp::Trace::LEVEL_DEBUG, "Rejected request (addr: 0x%lx, size: %lu)\n", addr,
+                        size);
         req->set_resp_status(vp::IO_RESP_INVALID);
         return vp::IO_REQ_DONE;
     }
@@ -791,11 +842,11 @@ vp::IoReqStatus SoftHierNetworkInterfaceV2::handle_req(vp::IoReq *req, bool wide
         *queue = req;
         if (!req->get_is_write() || !wide)
         {
-            this->req_queue.handle_req(req, wide, collective);
+            this->req_queue.handle_req(req, wide);
         }
         else
         {
-            this->wide_queue.handle_req(req, wide, collective);
+            this->wide_queue.handle_req(req, wide);
         }
         this->fsm_event.enqueue();
         return vp::IO_REQ_GRANTED;
@@ -937,6 +988,17 @@ bool SoftHierNetworkInterfaceV2::link_req(vp::Block *__this, SoftHierFloonocReqV
     _this->trace.msg(vp::Trace::LEVEL_DEBUG, "NOC_V2_EJECT req=%p at=(%d,%d)\n",
         req, _this->x, _this->y);
 
+    if (req->collective.type)
+    {
+        _this->trace_collective("ARRIVE", req->collective);
+        if (!_this->collective_deliver(req))
+        {
+            _this->collective_pending.push_back(req);
+        }
+        _this->collective_link_stalled =
+            _this->collective_pending.size() >= (size_t)_this->ni_outstanding_reqs;
+        return _this->collective_link_stalled;
+    }
     if (req->is_rsp)
     {
         // Response path: a reply has come back from the destination NI to us
@@ -1157,6 +1219,23 @@ void SoftHierNetworkInterfaceV2::fsm_handler(vp::Block *__this, vp::ClockEvent *
 {
     SoftHierNetworkInterfaceV2 *_this = (SoftHierNetworkInterfaceV2 *)__this;
 
+    for (auto it = _this->collective_pending.begin(); it != _this->collective_pending.end();)
+    {
+        if (_this->collective_deliver(*it))
+        {
+            it = _this->collective_pending.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    if (_this->collective_link_stalled &&
+        _this->collective_pending.size() < (size_t)_this->ni_outstanding_reqs)
+    {
+        _this->collective_link_stalled = false;
+        _this->link_in[NW_WIDE].unstall();
+    }
     _this->req_queue.check();
     _this->rsp_queue.check();
     _this->wide_queue.check();
@@ -1214,21 +1293,6 @@ void SoftHierNetworkInterfaceV2::fsm_handler(vp::Block *__this, vp::ClockEvent *
 
 void SoftHierNetworkInterfaceV2::handle_response(SoftHierFloonocReqV2 *req)
 {
-    if (req->collective.type)
-    {
-        auto parent = req->collective_parent;
-        this->traces.assert(parent != nullptr, "Collective leaf has no return join");
-        req->dest_x = parent->x;
-        req->dest_y = parent->y;
-        // Acknowledgements and reduced data use the actual response networks.
-        // Completion accounting is done once, after the root joins all leaves.
-        if (req->get_is_write()) this->rsp_queue.handle_rsp(req, true);
-        else this->wide_queue.handle_rsp(req, false);
-        this->traces.assert(req->is_last, "Collective fragment exceeds one beat");
-        this->flit_allocator->free(req);
-        return;
-    }
-
     if (!req->get_is_write())
     {
         // Read response: forward the data back through the rsp/wide network

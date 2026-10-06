@@ -14,7 +14,7 @@ class I3dDma(st.Component):
             'pulp/chips/arche3d/logic/idma/me/idma_me_2d.cpp',
         ])
         local.add_properties(dict(
-            gather_enable=True, collective_enable=False,
+            gather_enable=True,
             transfer_queue_size=arch.idma_outstand_txn,
             burst_queue_size=arch.idma_outstand_burst,
             loc_base=arch.cluster_tcdm_base, loc_size=arch.cluster_tcdm_size,
