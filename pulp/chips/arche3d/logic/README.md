@@ -18,10 +18,10 @@ porting a future SoftHier change requires an explicit edit and validation here.
 | `cluster_unit.py` | Logic tile, banked L1 composition, and dedicated-DMA attachment |
 | `icache.cpp` | Shared IO_v2 instruction cache adapted from `pulp/snitch/snitch_icache.cpp` |
 | `cluster_registers.*` | Local barriers, boot, and cluster registers |
-| `memory.*`, `cluster/`, `hwpe_interleaver.*` | Memories and L1 arbitration/interleaving |
+| `memory.*`, `l1_fabric.*` | Storage banks and queued L1 arbitration with shared HWPE bandwidth |
 | `snitch/` | Core wrappers, XDMA/RedMule/RVV instruction extensions, zero memory, sequencer, and register schema |
 | `idma/` | Logic-die DMA and the frontend/sparse middle-end shared with the I3D DMA |
-| `offload_decoder.*`, `light_redmule.*`, `transpose_engine.*`, `util_dumpper.*` | Tile peripherals and instruction offload |
+| `offload_decoder.*`, `light_redmule.*`, `matrix_bridge*`, `layout_engine.*`, `util_dumpper.*` | Selectable matrix engines, streaming layout conversion, tile peripherals and instruction offload |
 | `flex_mesh_noc.py`, `floonoc/` | Scalar sync NoC and bitmap-selected wakeup notifications |
 | `flex_mesh_noc_v2.py`, `floonoc_v2/`, `noc_bridge*` | Data NoC, ordinary DMA bridges and native masked collective endpoints/routers |
 

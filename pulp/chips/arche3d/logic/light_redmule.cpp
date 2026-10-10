@@ -86,6 +86,10 @@ public:
     static void fsm_handler(vp::Block *__this, vp::ClockEvent *event);
 
     vp::IoReqStatus send_tcdm_req();
+    static void tcdm_response(vp::Block *block, vp::IoReq *req);
+    static void tcdm_grant(vp::Block *, vp::IoReq *) {}
+    int64_t memory_started = 0;
+    bool memory_pending = false;
     void init_redmule_meta_data();
     uint32_t tmp_next_addr();
     uint32_t next_addr();
@@ -211,6 +215,8 @@ LightRedmule::LightRedmule(vp::ComponentConf &config)
     this->new_slave_port("core_acc", &this->core_acc_itf);
     this->new_slave_port("offload", &this->offload_itf, this);
     this->new_master_port("offload_grant", &this->offload_grant_itf, this);
+    this->tcdm_itf.set_resp_meth(tcdm_response);
+    this->tcdm_itf.set_grant_meth(tcdm_grant);
     this->new_master_port("tcdm", &this->tcdm_itf);
     
     
@@ -1016,7 +1022,24 @@ vp::IoReqStatus LightRedmule::req(vp::Block *__this, vp::IoReq *req)
 
 vp::IoReqStatus LightRedmule::send_tcdm_req()
 {
-    return this->tcdm_itf.req(this->tcdm_req);
+    memory_started = clock.get_cycles();
+    auto status = this->tcdm_itf.req(this->tcdm_req);
+    memory_pending = status == vp::IO_REQ_PENDING || status == vp::IO_REQ_DENIED;
+    return status;
+}
+
+void LightRedmule::tcdm_response(vp::Block *block, vp::IoReq *req)
+{
+    auto self = static_cast<LightRedmule *>(block);
+    if (req->status != vp::IO_REQ_OK) self->trace.fatal("RedMule L1 access failed\n");
+    // next_addr/iter_instruction and access_buffer remain stable until ACK.
+    if (self->compute_able && self->iter_instruction != INSTR_STOR_Z)
+        self->process_iter_instruction();
+    self->fsm_timestamp += self->clock.get_cycles() - self->memory_started;
+    self->pending_req_queue.push(self->fsm_timestamp + req->get_latency());
+    ++self->fsm_counter;
+    self->memory_pending = false;
+    self->event_enqueue(self->fsm_event, 1);
 }
 
 void LightRedmule::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
@@ -1041,6 +1064,8 @@ void LightRedmule::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 //Send request
                 vp::IoReqStatus err = _this->send_tcdm_req();
                 _this->trace.msg(vp::Trace::LEVEL_TRACE,"[LightRedmule][Preload] --- Send TCDM req #%d\n",_this->fsm_counter);
+
+                if (_this->memory_pending) return;
 
                 //Check error
                 if (err != vp::IO_REQ_OK) {
@@ -1110,6 +1135,8 @@ void LightRedmule::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 //Send request
                 vp::IoReqStatus err = _this->send_tcdm_req();
                 _this->trace.msg(vp::Trace::LEVEL_TRACE,"[LightRedmule][ROUTINE-ijk: %0d-%0d-%0d] --- Send TCDM req #%d\n", _this->iter_i, _this->iter_j, _this->iter_k, _this->fsm_counter);
+
+                if (_this->memory_pending) return;
 
                 //Check error
                 if (err != vp::IO_REQ_OK) {
@@ -1203,6 +1230,8 @@ void LightRedmule::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 //Send request
                 vp::IoReqStatus err = _this->send_tcdm_req();
                 _this->trace.msg(vp::Trace::LEVEL_TRACE,"[LightRedmule][Storing] --- Send TCDM req #%d\n",_this->fsm_counter);
+
+                if (_this->memory_pending) return;
 
                 //Check error
                 if (err != vp::IO_REQ_OK) {

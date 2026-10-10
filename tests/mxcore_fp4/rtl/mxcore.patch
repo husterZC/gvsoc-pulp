@@ -1,0 +1,70 @@
+diff --git a/mxcore-rtl/src/hwpe/mxcore_hwpe_ctrl.sv b/mxcore-rtl/src/hwpe/mxcore_hwpe_ctrl.sv
+index 4a35d8a..0bf36c9 100644
+--- a/mxcore-rtl/src/hwpe/mxcore_hwpe_ctrl.sv
++++ b/mxcore-rtl/src/hwpe/mxcore_hwpe_ctrl.sv
+@@ -83,7 +83,7 @@ module mxcore_hwpe_ctrl
+   assign RESULT_TILE_SIZE_REG = reg_file.hwpe_params[MXCoreRegResultTileSize];
+   assign ITER_COUNT           = reg_file.hwpe_params[MXCoreRegIterCount];
+ 
+-  localparam int unsigned VEC_PER_BLOCK = BlockSize / VectorSize;
++  localparam int unsigned VEC_PER_BLOCK = FP4BlockSize / (2*VectorSize);
+   localparam int unsigned SA_TILE_SIZE  = Reuse*SCALE_WIDTH;
+   localparam int unsigned SB_TILE_SIZE  = NPE*SCALE_WIDTH;
+   localparam bit          SATILE_GT_BW  = (SA_TILE_SIZE > MXCoreTCDMDataWidth);
+diff --git a/mxcore-rtl/src/hwpe/mxcore_hwpe_package.sv b/mxcore-rtl/src/hwpe/mxcore_hwpe_package.sv
+index 107e370..385d60e 100644
+--- a/mxcore-rtl/src/hwpe/mxcore_hwpe_package.sv
++++ b/mxcore-rtl/src/hwpe/mxcore_hwpe_package.sv
+@@ -21,7 +21,7 @@ package mxcore_hwpe_package;
+   parameter int unsigned MXCoreScaleADataWidth        = SCALE_WIDTH;
+   parameter int unsigned MXCoreScaleBDataWidth        = NPE*SCALE_WIDTH;
+   parameter int unsigned MXCoreEngineResultDataWidth  = NPE*DST_WIDTH;
+-  parameter int unsigned MXCoreQuantResultDataWidth   = NPE*SRC_WIDTH;
++  parameter int unsigned MXCoreQuantResultDataWidth   = NPE*4;
+   parameter int unsigned MXCoreQuantScaleDataWidth    = (NPE/BlockSize)*SCALE_WIDTH;
+ 
+   // TCDM Bandwidth available to MXCore
+diff --git a/mxcore-rtl/src/hwpe/mxcore_hwpe_top.sv b/mxcore-rtl/src/hwpe/mxcore_hwpe_top.sv
+index d741822..d8fcf52 100644
+--- a/mxcore-rtl/src/hwpe/mxcore_hwpe_top.sv
++++ b/mxcore-rtl/src/hwpe/mxcore_hwpe_top.sv
+@@ -196,7 +196,7 @@ module mxcore_hwpe_top
+     .InputDataWidth   ( MXCoreTCDMDataWidth              ),
+     .OutputDataWidth  ( MXCoreScaleADataWidth           ),
+     .ReuseFactor       ( Reuse                       ),
+-    .ScaleFactor       ( BlockSize / VectorSize     ),
++    .ScaleFactor       ( FP4BlockSize / (2*VectorSize)     ),
+     .FifoDepth         ( 2                           )
+   ) i_scale_a_buffer (
+     .clk_i              ( clk_i                       ),
+@@ -211,7 +211,7 @@ module mxcore_hwpe_top
+     .InputDataWidth     ( MXCoreTCDMDataWidth              ),
+     .OutputDataWidth    ( MXCoreScaleBDataWidth           ),
+     .ReuseFactor         ( Reuse                       ),
+-    .ScaleFactor         ( BlockSize / VectorSize     ),
++    .ScaleFactor         ( FP4BlockSize / (2*VectorSize)     ),
+     .FifoDepth           ( 2                           )
+   ) i_scale_b_buffer (
+     .clk_i            ( clk_i                       ),
+@@ -287,7 +287,7 @@ module mxcore_hwpe_top
+   assign mxcore_engine_result.ready       = engine_ctrl.quantize ? engine_result_to_quantizer.ready : engine_result_to_fifo.ready;
+ 
+   // ------------------------- MX Result Quantizer ----------------------------- //
+-  mxcore_hwpe_block_quantizer #(
++  mxcore_fp4_quantizer #(
+     .BlockSize         ( BlockSize              ),
+     .ScaleWidth        ( SCALE_WIDTH            ),
+     .InputDataWidth   ( MXCoreEngineResultDataWidth )
+diff --git a/mxcore-rtl/src/mxcore_package.sv b/mxcore-rtl/src/mxcore_package.sv
+index 8e96d64..371c541 100644
+--- a/mxcore-rtl/src/mxcore_package.sv
++++ b/mxcore-rtl/src/mxcore_package.sv
+@@ -24,7 +24,7 @@ package mxcore_package;
+   parameter int unsigned BlockSize                = 32;
+   parameter int unsigned MXFP8BlockSize           = BlockSize * SRC_WIDTH;
+   parameter int unsigned FP4SrcWidth              = 4;
+-  parameter int unsigned FP4BlockSize             = 2 * BlockSize;
++  parameter int unsigned FP4BlockSize             = BlockSize;
+ 
+   parameter fpnew_pkg::fmt_logic_t   EnMxdotpSrcFpFmtConfig  = 9'b000101001; // FP8, FP8ALT, FP4
+   parameter fpnew_pkg::ifmt_logic_t  EnMxdotpSrcIntFmtConfig = 4'b0000;      // No INT8

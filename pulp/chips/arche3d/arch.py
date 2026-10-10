@@ -16,6 +16,53 @@ def load_arch(config='default'):
             raise ValueError(f'No arche3d configuration: {config}')
         module = importlib.import_module(f'pulp.chips.arche3d.configs.{config}')
     arch = module.FlexClusterArch()
+    # Standalone configurations predating engine selection describe RedMule.
+    arch.matrix_engine = getattr(arch, 'matrix_engine', 'redmule')
+    arch.mxcore_fp4_core_list = getattr(arch, 'mxcore_fp4_core_list', [])
+    arch.mxcore_fp4_reg_base = getattr(arch, 'mxcore_fp4_reg_base', arch.redmule_reg_base)
+    arch.mxcore_fp4_reg_size = getattr(arch, 'mxcore_fp4_reg_size', 0x200)
+    arch.mxcore_fp4_irq = getattr(arch, 'mxcore_fp4_irq', 20)
+    arch.hwpe_bandwidth = getattr(arch, 'hwpe_bandwidth',
+        arch.cluster_tcdm_bank_nb * arch.cluster_tcdm_bank_width // 8)
+    arch.layout_conversion_latency = getattr(arch, 'layout_conversion_latency', 5)
+    if arch.matrix_engine not in ('redmule', 'mxcore_fp4'):
+        raise ValueError('matrix_engine must be redmule or mxcore_fp4')
+    owners = arch.mxcore_fp4_core_list if arch.matrix_engine == 'mxcore_fp4' else []
+    if arch.matrix_engine == 'mxcore_fp4' and not owners:
+        raise ValueError('MXCoreFP4 requires at least one owning core')
+    if (len(set(owners)) != len(owners) or
+            any(not isinstance(c, int) or not 0 <= c < min(32, arch.num_core_per_cluster) for c in owners)):
+        raise ValueError('MXCoreFP4 owners must be distinct valid core IDs')
+    if not 0 <= arch.mxcore_fp4_irq < 32 or arch.mxcore_fp4_irq == 19:
+        raise ValueError('MXCoreFP4 IRQ must be a valid line distinct from the barrier IRQ (19)')
+    arch.matrix_engine_kind = 2 if arch.matrix_engine == 'mxcore_fp4' else 1
+    arch.mxcore_fp4_count = len(owners)
+    arch.mxcore_fp4_core_mask = sum(1 << c for c in owners)
+    arch.layout_engine_base = arch.cluster_reg_base + arch.cluster_reg_size + 64
+    arch.layout_engine_size = 64
+    matrix_base = arch.mxcore_fp4_reg_base if owners else arch.redmule_reg_base
+    matrix_size = arch.mxcore_fp4_reg_size * len(owners) if owners else arch.redmule_reg_size
+    if (matrix_base < 0 or matrix_base % 4 or matrix_size < 0x68 or
+            matrix_base + matrix_size > 1 << 32 or arch.mxcore_fp4_reg_size % 4 or
+            (owners and arch.mxcore_fp4_reg_size < 0x68)):
+        raise ValueError('Matrix register windows must be word aligned and fit RV32')
+    bank_bytes = arch.cluster_tcdm_bank_width // 8
+    if (bank_bytes < 4 or bank_bytes & (bank_bytes - 1) or
+            arch.cluster_tcdm_bank_nb <= 0 or
+            arch.cluster_tcdm_size % (bank_bytes * arch.cluster_tcdm_bank_nb)):
+        raise ValueError('L1 requires power-of-two bank words and complete interleaving rows')
+    if (arch.hwpe_bandwidth <= 0 or arch.hwpe_bandwidth % bank_bytes or
+            arch.hwpe_bandwidth > bank_bytes * arch.cluster_tcdm_bank_nb):
+        raise ValueError('HWPE bandwidth must be whole bank words, at most the L1 aggregate width')
+    if arch.layout_conversion_latency != 5:
+        raise ValueError('The layout conversion pipeline has five internal cycles')
+    for base, size in ((arch.cluster_tcdm_base, arch.cluster_tcdm_size),
+                       (arch.cluster_reg_base, arch.cluster_reg_size + 128),
+                       (arch.cluster_zomem_base, arch.cluster_zomem_size),
+                       (arch.cluster_tcdm_remote, arch.cluster_tcdm_size * 1024),
+                       (arch.soc_register_base, arch.soc_register_size)):
+        if matrix_base < base + size and base < matrix_base + matrix_size:
+            raise ValueError('Matrix registers overlap another cluster mapping')
     # Older standalone configs retain the existing DRAMSys behavior.
     arch.dram3d_backend = getattr(arch, 'dram3d_backend', 'dramsys')
     arch.dram3d_ram_slots = getattr(arch, 'dram3d_ram_slots', 4)
@@ -52,7 +99,7 @@ def load_arch(config='default'):
     for base, size in ((arch.cluster_tcdm_remote, remote_end - arch.cluster_tcdm_remote),
                        (arch.cluster_tcdm_base, arch.cluster_tcdm_size),
                        (arch.cluster_reg_base, arch.cluster_reg_size + 128),
-                       (arch.redmule_reg_base, arch.redmule_reg_size),
+                       (matrix_base, matrix_size),
                        (arch.instruction_base, arch.num_cluster_x * arch.num_cluster_y *
                         arch.dram3d_vault_interleave),
                        (arch.soc_register_base, arch.soc_register_size)):
@@ -104,7 +151,7 @@ def load_arch(config='default'):
     for base, size in ((arch.cluster_tcdm_base, arch.cluster_tcdm_size),
                        (arch.cluster_tcdm_remote, remote_end - arch.cluster_tcdm_remote),
                        (arch.cluster_reg_base, arch.cluster_reg_size + 128),
-                       (arch.redmule_reg_base, arch.redmule_reg_size),
+                       (matrix_base, matrix_size),
                        (arch.soc_register_base, arch.soc_register_size)):
         if arch.instruction_base < base + size and base < arch.instruction_base + image_size:
             raise ValueError('The instruction alias overlaps another scalar mapping')

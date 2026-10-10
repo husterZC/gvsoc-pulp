@@ -35,7 +35,9 @@ IDmaBeTcdm::IDmaBeTcdm(vp::Component *idma, std::string itf_name, IdmaBeProducer
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
 
     // Declare our own trace so that we can individually activate traces
-    idma->new_master_port(itf_name, &this->ico_itf);
+    this->ico_itf.set_resp_meth(response);
+    this->ico_itf.set_grant_meth(grant);
+    idma->new_master_port(itf_name, &this->ico_itf, this);
 
     // Get the width of the TCDM interconnect. This is used to constrain the size of the
     // requests which are sent to the TCDM
@@ -110,7 +112,7 @@ bool IDmaBeTcdm::can_accept_burst()
 bool IDmaBeTcdm::can_accept_data()
 {
     // Accept data if we don't have already a chunk of data being written
-    return this->write_current_chunk_size == 0;
+    return this->write_current_chunk_size == 0 && !memory_pending && write_ack_timestamp == -1;
 }
 
 
@@ -138,6 +140,7 @@ void IDmaBeTcdm::reset(bool active)
 {
     if (active)
     {
+        this->memory_pending = false;
         this->current_burst_size = 0;
         this->read_pending_line_size = 0;
 
@@ -179,34 +182,13 @@ void IDmaBeTcdm::write_line()
         this->write_current_chunk_size -= size;
         this->write_current_chunk_data += size;
 
-        // Send request to TCDM
+        memory_pending = true;
         vp::IoReqStatus status = this->ico_itf.req(req);
-        if (status == vp::IoReqStatus::IO_REQ_INVALID)
-        {
-            trace.force_warning("Invalid access during TCDM write line (base: 0x%lx, size: 0x%lx)\n",
-                base, size);
-        }
-        else if (status != vp::IoReqStatus::IO_REQ_OK)
-        {
-            // For now aynchronous replies are not supported since dma is always passing.
-            // This could be needed if we want to model a more dynamic priority
-            trace.fatal("Asynchronous response is not supported on TCDM backend\n");
+        if (status == vp::IO_REQ_OK || status == vp::IO_REQ_INVALID) {
+            req->status = status;
+            response(this, req);
         }
 
-        if (req->get_latency() == 0)
-        {
-            // If the response has no latency, handle it now so that we can immediately continue
-            // with the next line
-            this->remove_chunk_from_current_burst(size);
-            this->write_handle_req_ack();
-        }
-        else
-        {
-            // Otherwise enqueue it with timestamp so that we acknowledge it at correct time
-            this->write_ack_timestamp = this->clock.get_cycles() + req->get_latency();
-            this->write_ack_size = size;
-            this->fsm_event.enqueue(req->get_latency());
-        }
     }
     else
     {
@@ -293,37 +275,32 @@ void IDmaBeTcdm::read_line()
     // We will free it when we receive the ack
     req->set_data(new uint8_t[size]);
 
-    // Send to TCDM
+    memory_pending = true;
     vp::IoReqStatus status = this->ico_itf.req(req);
-    if (status == vp::IoReqStatus::IO_REQ_INVALID)
-    {
-        trace.force_warning("Invalid access during TCDM write line (base: 0x%lx, size: 0x%lx)\n",
-            base, size);
-    }
-    else if (status != vp::IoReqStatus::IO_REQ_OK)
-    {
-        // For now aynchronous replies are not supported since dma is always passing.
-        // This could be needed if we want to model a more dynamic priority
-        trace.fatal("Asynchronous response is not supported on TCDM backend\n");
+    if (status == vp::IO_REQ_OK || status == vp::IO_REQ_INVALID) {
+        req->status = status;
+        response(this, req);
     }
 
-    if (req->get_latency() == 0 && this->be->is_ready_to_accept_data())
-    {
-        // If there is no latency and backend is ready, we can immediately push the data
-        this->remove_chunk_from_current_burst(size);
-        this->be->write_data(req->get_data(), size);
-    }
-    else
-    {
-        // Otherwise we have to put it on hold since we can only have one request pending
-        this->read_pending_timestamp = this->clock.get_cycles() + req->get_latency();
-        this->read_pending_line_data = req->get_data();
-        this->read_pending_line_size = size;
-        this->fsm_event.enqueue(req->get_latency());
-    }
 }
 
 
+
+void IDmaBeTcdm::response(vp::Block *block, vp::IoReq *req)
+{
+    auto self = static_cast<IDmaBeTcdm *>(block);
+    if (req->status != vp::IO_REQ_OK) self->trace.fatal("iDMA L1 access failed\n");
+    self->memory_pending = false;
+    if (req->get_is_write()) {
+        self->write_ack_timestamp = self->clock.get_cycles() + req->get_latency();
+        self->write_ack_size = req->get_size();
+    } else {
+        self->read_pending_timestamp = self->clock.get_cycles() + req->get_latency();
+        self->read_pending_line_data = req->get_data();
+        self->read_pending_line_size = req->get_size();
+    }
+    self->fsm_event.enqueue();
+}
 
 // Called by destination backend to ack the data we sent for writing
 void IDmaBeTcdm::write_data_ack(uint8_t *data)
@@ -340,6 +317,8 @@ void IDmaBeTcdm::write_data_ack(uint8_t *data)
 void IDmaBeTcdm::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 {
     IDmaBeTcdm *_this = (IDmaBeTcdm *)__this;
+
+    if (_this->memory_pending) return;
 
     // Check if we should acknowledge the previous line, this can happen when the write request
     // got a latency
@@ -364,6 +343,8 @@ void IDmaBeTcdm::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         // Pending write chunk
         _this->write_line();
     }
+
+    if (_this->memory_pending) return;
 
     if (_this->burst_queue_is_write.size() > 0 && !_this->burst_queue_is_write.front())
     {

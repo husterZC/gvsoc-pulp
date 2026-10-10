@@ -21,7 +21,7 @@ import regmap.regmap_c_header
 
 class ClusterRegisters(gvsoc.systree.Component):
 
-    def __init__(self, parent, name, num_cluster_x, num_cluster_y, boot_addr=0, nb_cores=1, cluster_id=0, sync_wakeup_addr=0, binary=None):
+    def __init__(self, parent, name, num_cluster_x, num_cluster_y, boot_addr=0, nb_cores=1, cluster_id=0, sync_wakeup_addr=0, binary=None, matrix_engine=1, mxcore_owners=(), matrix_base=0, matrix_stride=0, matrix_irq=20, layout_base=0):
         super(ClusterRegisters, self).__init__(parent, name)
 
         self.add_sources(['pulp/chips/arche3d/logic/cluster_registers.cpp'])
@@ -33,6 +33,9 @@ class ClusterRegisters(gvsoc.systree.Component):
             'nb_cores': nb_cores,
             'cluster_id': cluster_id,
             'sync_wakeup_addr': sync_wakeup_addr,
+            'matrix_engine': matrix_engine, 'mxcore_owners': list(mxcore_owners),
+            'matrix_base': matrix_base, 'matrix_stride': matrix_stride,
+            'matrix_irq': matrix_irq, 'layout_base': layout_base,
         })
 
     def gen(self, builddir, installdir):

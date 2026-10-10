@@ -279,6 +279,7 @@ class SnitchFast(cpu.iss.riscv.RiscvCommon):
             "-DPIPELINE_STAGES=1",
             "-DCONFIG_ISS_CORE=snitch_fast",
             "-DCONFIG_GVSOC_ISS_SNITCH_FAST",
+            "-DCONFIG_GVSOC_ISS_ASYNC_FPU_LSU",
         ])
 
         if inc_spatz:

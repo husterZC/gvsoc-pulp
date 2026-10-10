@@ -142,7 +142,8 @@ checks opcode collisions and preservation of existing encodings.
 
 ## Cross-unit floating-point regression
 
-Build `app=fp_alignment` and run on **four tiles**. It compares real scalar,
+Build `cfg=arche3d_redmule app=fp_alignment` and run on **four tiles** with the
+same configuration. It compares real scalar,
 Spatz and native data-NoC sum/max results in all four formats and checks the
 RedMule FP32 accumulator, including retained small contributions, BF16 range,
 per-MAC rounding, and internal tile boundaries. The standalone
@@ -213,3 +214,83 @@ The reporter requires `--allow-fixture` and labels this 32x1 result explicitly.
 Use the production `arche3d` target for default 32x32 measurements. See the
 [benchmark instructions](../../../arche3d_sdk/apps/collective_row_sweep/README.md)
 for bulk descriptors, timing boundaries, full-size commands and validation.
+
+## Layout and matrix integration
+
+The default architecture selects four MXCoreFP4 engines, owned by cores 0–3.
+`cfg=arche3d_redmule` selects the original single RedMule. These regressions
+use the production tile with built-in RAM and one/four clusters; they do not
+claim full 32×32-chip or DRAMSys performance.
+
+After the normal GVSoC and RISC-V compiler setup, run from the repository root:
+
+```sh
+make -C pulp/tests/arche3d PYTHON=python3 all
+```
+
+The build compiles both matrix configurations and the isolated production-L1
+layout fixture. `run` can be used alone after building. All generated vectors,
+ELFs, logs and `validation.json` are under `build/arche3d_work/`.
+
+The suite covers:
+
+- `accelerators`: concurrent four-owner MXFP4 GEMM, layout conversion, both
+  DMAs, scalar integer/FP and Spatz traffic; all 54 requested M/N/K shapes;
+  per-owner IRQ assertion/acknowledgement and runtime feature discovery.
+  All 18 supported `A*A^T` shapes reuse the same input payload and scales,
+  check nonuniform numerical results and input preservation, and reject 36
+  output/input or output/output overlap descriptors across the four owners.
+  A `Q[32,96]*K[64,96]^T` GEMM feeds its actual MXFP4 S output into `S*V`
+  after row→column reblocking of `V[64,64]`; the result has an independent
+  analytic reference. The SDK reverse conversion is checked on this exactly
+  representable V (general reblocking round trips may lose precision).
+  The RedMule variant exercises its GEMM through queued L1 responses.
+- `fp_formats` and four-tile `fp_alignment`: scalar/vector FP formats, NoC
+  arithmetic, RedMule results with stalls, and an explicit RedMule skip on
+  MXCore hardware. No unsupported RedMule instruction is issued.
+- `memory`, `smoke`, `collective`: four-tile shared-memory/atomic visibility,
+  asynchronous DMA tails/gathers and concurrent native-collective L1 traffic.
+- `arche3d_layout_test`: low-before-high submission order deliberately tests
+  DMA/BUS → HWPE → scalar service priority and the value seen by a queued read.
+  It also tests exclusive layout acquisition and invalid descriptors.
+- Twenty-five linear conversion cases, two rectangular edge-tile transposes,
+  and 26 MXFP4 row↔column reblocking cases.
+  An independent Python rational-number oracle covers every FP16/BF16 input
+  encoding in the largest pack cases, every E2M1 nibble/E8M0 scale combination
+  in unpacking, signed zeros, subnormals, saturation, rounding ties and NaNs.
+  Reblocking checks both directions, rectangular tile traversal, E8M0 scale
+  changes, finite values beyond FP32 range, signed zeros, and NaN propagation.
+  Both matrix dimensions must be multiples of 32; the negative tests also
+  reject partial dimensions, overlapping payload/scale outputs and invalid
+  destination scale addresses.
+
+The isolated layout fixture uses 128 banks × 4 bytes and a shared HWPE
+read-plus-write bandwidth of 512 bytes/cycle. Each conversion has five
+internal cycles. Measured engine start-to-completion results:
+
+| Conversion | Elements | Payload + scale traffic | Cycles | Bytes/cycle |
+| --- | ---: | ---: | ---: | ---: |
+| MXFP4 → E5M2 or E4M3 | 32 | 49 | 9 | 5.44 |
+| MXFP4 → E5M2 or E4M3 | 8,192 | 12,544 | 26 | 482.46 |
+| MXFP4 → E5M2 or E4M3 | 65,536 | 100,352 | 197 | 509.40 |
+| MXFP4 → BF16 | 65,536 | 165,888 | 325 | 510.42 |
+| BF16 → MXFP4 | 65,536 | 165,888 | 325 | 510.42 |
+| FP16 → MXFP4 | 65,536 | 165,888 | 325 | 510.42 |
+| MXFP4 row↔column, 32×32 | 1,024 | 1,088 | 10 | 108.80 |
+| MXFP4 row↔column, 128×128 | 16,384 | 17,408 | 35 | 497.37 |
+| MXFP4 row↔column, 256×256 | 65,536 | 69,632 | 138 | 504.58 |
+| MXFP4 row↔column, 32×2,048 or 2,048×32 | 65,536 | 69,632 | 138 | 504.58 |
+
+The single-block/tile cases check the five-cycle pipeline latency and the
+large conversion cases assert at least 90% utilization. These figures
+exclude software descriptor programming and fixture initialization. Competing
+DMA/BUS traffic wins bank arbitration; other HWPE units share the same credits.
+The software overlap checks verify correctness under that backpressure.
+The reblocking model traverses tiles diagonally to distribute both source
+and destination scale requests across banks. Performance also depends on
+matrix shape, buffer alignment and competing L1 traffic.
+
+`python pulp/tests/arche3d/test_accelerator_config.py` separately tests default,
+RedMule, reordered/two-owner and legacy standalone configurations, plus invalid
+owners, register overlaps and bus widths. The original MXCore RTL calibration
+and standalone timing regressions remain in `pulp/tests/mxcore_fp4/`.

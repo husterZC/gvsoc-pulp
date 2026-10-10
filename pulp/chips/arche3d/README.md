@@ -2,7 +2,7 @@
 
 `arche3d` combines the SoftHier logic tile with an I3D interconnect die and a
 distributed DRAM die. The default architecture uses **32 × 32 clusters**.
-Each cluster has six Snitch cores, four Spatz vector units, RedMule, banked L1,
+Each cluster has six Snitch cores, four Spatz vector units, four MXCoreFP4 engines, banked L1,
 the existing logic-die DMA, and a dedicated I3D DMA on **core 4 (`n-2`)**.
 Core 5 (`n-1`) is the SDK's designated logic-die DMA core.
 
@@ -21,7 +21,7 @@ module dependencies.
 ```mermaid
 flowchart BT
   subgraph Logic[Logic die: 32 × 32 SoftHier tiles]
-    PE[6 cores + Spatz + RedMule] <--> L1[432 KiB banked L1 per tile]
+    PE[6 cores + Spatz + selected matrix engines] <--> L1[432 KiB banked L1 per tile]
     PE --> IC[Shared 32-KiB instruction cache]
     PE --> DMA2[Logic-die DMA]
     DMA2 <--> Mesh[1024-bit 2D NoC]
@@ -76,7 +76,7 @@ before the first simulated cycle; this interval has no progress counter.
 
 [`configs/default.py`](configs/default.py) contains the architecture parameters.
 Both the hardware target and SDK read this **same file**. No configuration is
-copied over tracked source files. `cfg` accepts `default` or a Python file
+copied over tracked source files. `cfg` accepts `default`, `arche3d_redmule`, or a Python file
 defining `FlexClusterArch`:
 
 ```bash
@@ -93,9 +93,32 @@ accepts `fattree`, `mesh`, or `xbar`. Fat-tree routing accepts `NCA_HASH` or
 contexts, eight memory contexts, AXI address/data/ID/LEN widths 64/512/10/8,
 and at most 256 beats per burst. All dies run at 1 GHz.
 
-The default cluster has 432 KiB of TCDM and a 16 × 32 RedMule array. TCDM bank
-timing prioritizes DMA over RedMule and other HWPE accesses, then core/vector
-accesses. All paths still access the same physical banks.
+The default cluster has 432 KiB of TCDM and four MXCoreFP4 engines attached to
+cores 0–3. `cfg=arche3d_redmule` selects the original single 16 × 32 RedMule
+array. `matrix_engine` selects exactly one kind; `mxcore_fp4_core_list` sets
+instance order and IRQ ownership. Each MXCore has a 0x200-byte register window
+starting at 0x20020000 and an owner IRQ on line 20. Hardware discovery exposes
+the engine kind, count, owners, register map and IRQ to the SDK.
+
+The shared `layout_engine` replaces `transpose_engine` at 0x20000240. It retains
+byte/halfword transpose and adds MXFP4→FP8 (E5M2/E4M3), MXFP4→BF16,
+BF16→MXFP4 and FP16→MXFP4 streaming conversion with five internal cycles.
+MXFP4 row↔column reblocking uses 32×32 tiles, requantizes destination blocks,
+and produces MXCore-compatible payload and scale order in both directions.
+The logical matrix shape is preserved; both dimensions must be multiples of 32.
+All matrix engines and layout share one 512-byte/cycle HWPE bus.
+
+L1 arbitration queues requests before accessing storage: DMA and incoming
+BUS/sync traffic have highest priority, HWPE has middle priority, scalar and
+Spatz have lowest priority. Each bank serves one word/cycle; same-priority
+ports rotate. Requests retain their buffers until all bank fragments complete.
+The legacy DMA, RedMule, scalar floating-point LSU and Spatz now handle these
+asynchronous replies. No unit discards L1 backpressure.
+
+See [the SDK programming guide](../../../../arche3d_sdk/docs/bare_metal_programming.md)
+for buffer formats, discovery, register offsets and runtime calls, and the
+[regression fixture](../../../tests/arche3d/README.md#layout-and-matrix-integration)
+for correctness and throughput measurements.
 
 By default, `dram3d_backend='dramsys'` selects `pulp.3d_network.dramsys_endpoint`.
 Each endpoint uses `hbm4-emu-fast.json` through the existing GVSoC DRAMSys

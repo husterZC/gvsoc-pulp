@@ -132,12 +132,13 @@ run from the GVSoC repository root:
 
 ```bash
 python pulp/tests/arche3d/test_float_math.py
-make TARGETS='arche3d_dma_test arche3d_collective_test' \
+make cfg=arche3d_redmule TARGETS='arche3d_dma_test arche3d_collective_test' \
     MODULES="$PWD/pulp/tests/arche3d;$PWD/pulp/tests/arche3d_collectives" build
-make cfg=default app=fp_alignment arche3d-sw
+make cfg=arche3d_redmule app=fp_alignment arche3d-sw
 gvrun --target=arche3d_dma_test --target-dir=pulp/tests/arche3d \
     --parameter=clusters=4 \
-    --binary=build/arche3d/sw/default/fp_alignment/fp_alignment.elf \
+    --parameter=config=arche3d_redmule \
+    --binary=build/arche3d/sw/arche3d_redmule/fp_alignment/fp_alignment.elf \
     --work-dir=build/runs/arche3d_fp_alignment run
 gvrun --target=arche3d_collective_test --target-dir=pulp/tests/arche3d_collectives \
     --work-dir=build/runs/arche3d_collectives run
@@ -153,7 +154,8 @@ reference without enumerating its encoding space. Directed cases cover signed
 zeros, subnormals, infinities, NaNs, and overflow; host rounding/exception
 environment isolation is also checked.
 
-`fp_alignment` runs on four production tiles. Every scalar core computes sum,
+`fp_alignment` runs on four production tiles. Select `arche3d_redmule` to exercise
+RedMule; the default MXCore configuration reports that part skipped. Every scalar core computes sum,
 max and FMA references; all configured Spatz cores compare vector results. The
 native endpoint issues two-participant posted reductions and compares with the scalar
 results. RedMule tests cover subnormals, fused rounding, BF16 input/initial-Y

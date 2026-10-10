@@ -92,6 +92,9 @@ private:
 
     // Request used for TCDM accesses, only one at the same time is possible
     vp::IoReq req;
+    bool memory_pending = false;
+    static void response(vp::Block *block, vp::IoReq *req);
+    static void grant(vp::Block *, vp::IoReq *) {}
 
     // Queue of pending bursts giving burst base address
     std::queue<uint64_t> burst_queue_base;

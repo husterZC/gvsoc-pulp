@@ -66,6 +66,8 @@ private:
     vp::reg_32 barrier_status;
     uint32_t num_cluster_x;
     uint32_t num_cluster_y;
+    uint32_t matrix_engine, matrix_base, matrix_stride, matrix_irq, layout_base;
+    std::vector<uint32_t> mxcore_owners;
 
     std::vector<vp::WireSlave<bool>> barrier_req_itf;
     vp::WireMaster<bool> barrier_ack_itf;
@@ -119,6 +121,14 @@ ClusterRegisters::ClusterRegisters(vp::ComponentConf &config)
     this->wakeup_output_itf.set_resp_meth(&ClusterRegisters::response);
     this->wakeup_output_itf.set_grant_meth(&ClusterRegisters::grant);
 
+    matrix_engine = get_js_config()->get_int("matrix_engine");
+    matrix_base = get_js_config()->get_uint("matrix_base");
+    matrix_stride = get_js_config()->get_uint("matrix_stride");
+    matrix_irq = get_js_config()->get_int("matrix_irq");
+    layout_base = get_js_config()->get_uint("layout_base");
+    for (auto item : get_js_config()->get("mxcore_owners")->get_elems())
+        mxcore_owners.push_back(item->get_int());
+
     this->global_sync_enable = 0;
     this->global_sync_timestamp = 0;
 
@@ -169,7 +179,20 @@ vp::IoReqStatus ClusterRegisters::req(vp::Block *block, vp::IoReq *req)
             case 0x28: value = self->wakeup_y_mask; break;
             case 0x2c: value = self->wakeup_pending; break;
             case 0x30: value = self->wakeup_received; break;
-            default: return vp::IO_REQ_INVALID;
+            case 0x34: value = self->matrix_engine; break;
+            case 0x38: value = self->mxcore_owners.size(); break;
+            case 0x3c:
+                value = 0;
+                for (auto owner : self->mxcore_owners) value |= 1u << owner;
+                break;
+            case 0x40: value = self->matrix_base; break;
+            case 0x44: value = self->matrix_stride; break;
+            case 0x48: value = self->matrix_irq; break;
+            case 0x4c: value = self->layout_base; break;
+            default:
+                if (offset >= 0x80 && (offset - 0x80) / 4 < self->mxcore_owners.size())
+                    value = self->mxcore_owners[(offset - 0x80) / 4];
+                else return vp::IO_REQ_INVALID;
         }
         std::memcpy(req->get_data(), &value, 4);
         return vp::IO_REQ_OK;

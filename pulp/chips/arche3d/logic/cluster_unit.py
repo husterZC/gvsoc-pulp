@@ -22,16 +22,14 @@ import gvsoc.systree
 from pulp.chips.arche3d.logic.cluster_registers import ClusterRegisters
 from pulp.chips.arche3d.logic.light_redmule import LightRedmule
 from pulp.chips.arche3d.logic.offload_decoder import Arche3dOffloadDecoder
-from pulp.chips.arche3d.logic.hwpe_interleaver import HWPEInterleaver
-from pulp.chips.arche3d.logic.priority_arbiter_filter import PriorityArbiterFilter
-from pulp.chips.arche3d.logic.transpose_engine import TransposeEngine
+from pulp.chips.arche3d.logic.l1_fabric import L1Fabric
+from pulp.chips.arche3d.logic.layout_engine import LayoutEngine
+from pulp.chips.arche3d.logic.matrix_bridge import MatrixBridge
+from pulp.mxcore_fp4 import MXCoreFP4
 from pulp.chips.arche3d.logic.util_dumpper import UtilDumpper
-from pulp.chips.arche3d.logic.snitch.snitch_cluster.dma_interleaver import DmaInterleaver
 from pulp.chips.arche3d.logic.snitch.zero_mem import ZeroMem
 from pulp.chips.arche3d.logic.idma.snitch_dma import SnitchDma
-from pulp.chips.arche3d.logic.cluster.l1_interleaver import L1_interleaver
 import gvsoc.runner
-import math
 from pulp.chips.arche3d.logic.snitch.sequencer import Sequencer
 
 
@@ -60,15 +58,18 @@ class ClusterArch:
                         spatz_core_list,    spatz_num_vlsu,     spatz_num_fu,
                         spatz_vlsu_bw,      spatz_vreg_gather_eff,
                         data_bandwidth,     auto_fetch=False,   multi_idma_enable=0,
-                        core_model="fast",  tech_node="5nm", idma_gather_enable=False):
+                        core_model="fast",  tech_node="5nm", idma_gather_enable=False,
+                        matrix_engine="redmule", mxcore_fp4_core_list=(),
+                        mxcore_fp4_reg_base=0x20020000, mxcore_fp4_reg_size=0x200,
+                        mxcore_fp4_irq=20, hwpe_bandwidth=512, layout_conversion_latency=5):
 
         self.nb_core                = nb_core_per_cluster
         self.base                   = base
         self.cluster_id             = cluster_id
         self.auto_fetch             = auto_fetch
         self.barrier_irq            = 19
-        # One additional scalar L1 port is reserved for the synchronization NoC.
-        self.tcdm                   = ClusterArch.Tcdm(base, self.nb_core + len(spatz_core_list)*spatz_num_vlsu + 1, tcdm_size, nb_tcdm_banks, tcdm_bank_width, tech_node)
+        # Scalar and vector ports share the lowest L1 priority.
+        self.tcdm                   = ClusterArch.Tcdm(base, self.nb_core + len(spatz_core_list)*spatz_num_vlsu, tcdm_size, nb_tcdm_banks, tcdm_bank_width, tech_node)
         self.zomem_area             = Area(zomem_base, zomem_size)
         self.remote_tcdm_area       = Area(tcdm_remote, tcdm_size * num_cluster_x * num_cluster_y)
         self.sync_wakeup_addr       = sync_wakeup_addr
@@ -81,6 +82,16 @@ class ClusterArch:
         self.spatz_num_fu           = spatz_num_fu
         self.spatz_vlsu_bw          = spatz_vlsu_bw
         self.spatz_vreg_gather_eff  = spatz_vreg_gather_eff
+
+        # Mutually exclusive matrix architectures; instance order defines MMIO order.
+        self.matrix_engine = matrix_engine
+        self.mxcore_fp4_core_list = list(mxcore_fp4_core_list) if matrix_engine == 'mxcore_fp4' else []
+        self.mxcore_fp4_reg_base = mxcore_fp4_reg_base
+        self.mxcore_fp4_reg_size = mxcore_fp4_reg_size
+        self.mxcore_fp4_irq = mxcore_fp4_irq
+        self.layout_conversion_latency = layout_conversion_latency
+        self.tcdm.hwpe_bandwidth = hwpe_bandwidth
+        self.tcdm.hwpe_ports = 1 + (len(self.mxcore_fp4_core_list) if matrix_engine == 'mxcore_fp4' else 1)
 
         #RedMule
         self.redmule_ce_height      = redmule_ce_height
@@ -108,7 +119,7 @@ class ClusterArch:
             self.area = Area( base, tcdm_size)
             self.nb_tcdm_banks = nb_tcdm_banks
             self.bank_width = tcdm_bank_width
-            self.bank_size = (self.area.size / self.nb_tcdm_banks) + self.bank_width #prevent overflow due to RedMule access model
+            self.bank_size = self.area.size // self.nb_tcdm_banks
             self.nb_masters = nb_masters
             self.tech_node = tech_node
 
@@ -118,39 +129,19 @@ class ClusterTcdm(gvsoc.systree.Component):
     def __init__(self, parent, name, arch):
         super().__init__(parent, name)
 
-        banks = []
-        prior_arbiters = []
-        nb_banks = arch.nb_tcdm_banks
-        for i in range(0, nb_banks):
-            banks.append(memory.Memory(self, f'bank_{i}', size=arch.bank_size, atomics=True, width_log2=int(math.log2(arch.bank_width)), tech_node=arch.tech_node))
-            prior_arbiters.append(PriorityArbiterFilter(self, f'prior_arbiter_{i}', bank_width=arch.bank_width))
-
-        interleaver = L1_interleaver(self, 'interleaver', nb_slaves=nb_banks,
-            nb_masters=arch.nb_masters, interleaving_bits=int(math.log2(arch.bank_width)))
-
-        dma_interleaver = DmaInterleaver(self, 'dma_interleaver', arch.nb_masters,
-            nb_banks, arch.bank_width)
-
-        bus_interleaver = DmaInterleaver(self, 'bus_interleaver', arch.nb_masters,
-            nb_banks, arch.bank_width)
-
-        hwpe_interleaver = HWPEInterleaver(self, 'hwpe_interleaver', arch.nb_masters,
-            nb_banks, arch.bank_width)
-
-        for i in range(0, nb_banks):
-            self.bind(interleaver, 'out_%d' % i, banks[i], 'input')
-            self.bind(prior_arbiters[i], 'out', banks[i], 'input')
-            self.bind(dma_interleaver, 'out_%d' % i, prior_arbiters[i], 'input')
-            self.bind(bus_interleaver, 'out_%d' % i, prior_arbiters[i], 'input')
-            self.bind(hwpe_interleaver, 'out_%d' % i, prior_arbiters[i], 'input')
-
-        for i in range(0, arch.nb_masters):
-            self.bind(self, f'in_{i}', interleaver, f'in_{i}')
-            self.bind(self, f'dma_input', dma_interleaver, f'input')
-            self.bind(self, f'bus_input', bus_interleaver, f'input')
-            self.bind(self, f'hwpe_input', hwpe_interleaver, f'input')
-
-        self.bind(self, 'sync_input', interleaver, f'in_{arch.nb_masters - 1}')
+        fabric = L1Fabric(self, 'fabric', banks=arch.nb_tcdm_banks,
+            bank_width=arch.bank_width, size=arch.area.size, low_ports=arch.nb_masters,
+            hwpe_ports=arch.hwpe_ports, hwpe_bandwidth=arch.hwpe_bandwidth)
+        for i in range(arch.nb_tcdm_banks):
+            bank = memory.Memory(self, f'bank_{i}', size=arch.bank_size, atomics=True,
+                                 width_log2=0, tech_node=arch.tech_node)
+            self.bind(fabric, f'out_{i}', bank, 'input')
+        for i in range(arch.nb_masters):
+            self.bind(self, f'in_{i}', fabric, f'in_{i}')
+        for port in ('dma_input', 'bus_input', 'sync_input'):
+            self.bind(self, port, fabric, port)
+        for i in range(arch.hwpe_ports):
+            self.bind(self, f'hwpe_{i}', fabric, f'hwpe_{i}')
 
     def i_INPUT(self, port: int) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'in_{port}', signature='io')
@@ -161,8 +152,8 @@ class ClusterTcdm(gvsoc.systree.Component):
     def i_BUS_INPUT(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'bus_input', signature='io')
 
-    def i_HWPE_INPUT(self) -> gvsoc.systree.SlaveItf:
-        return gvsoc.systree.SlaveItf(self, f'hwpe_input', signature='io')
+    def i_HWPE_INPUT(self, port=0) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(self, f'hwpe_{port}', signature='io')
 
     def i_SYNC_INPUT(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'sync_input', signature='io')
@@ -230,21 +221,26 @@ class ClusterUnit(gvsoc.systree.Component):
 
             cores_ico.append(router.Router(self, f'pe{core_id}_ico', bandwidth=arch.tcdm.bank_width))
 
-        # RedMule
-        redmule = LightRedmule(self, f'redmule',
-                                    tcdm_bank_width     = arch.tcdm.bank_width,
-                                    tcdm_bank_number    = arch.tcdm.nb_tcdm_banks,
-                                    elem_size           = arch.redmule_elem_size,
-                                    ce_height           = arch.redmule_ce_height,
-                                    ce_width            = arch.redmule_ce_width,
-                                    ce_pipe             = arch.redmule_ce_pipe,
-                                    queue_depth         = arch.redmule_queue_depth,
-                                    tech_node           = arch.tech_node)
+        redmule = None
+        if arch.matrix_engine == 'redmule':
+            redmule = LightRedmule(self, f'redmule',
+                                        tcdm_bank_width     = arch.tcdm.bank_width,
+                                        tcdm_bank_number    = arch.tcdm.nb_tcdm_banks,
+                                        elem_size           = arch.redmule_elem_size,
+                                        ce_height           = arch.redmule_ce_height,
+                                        ce_width            = arch.redmule_ce_width,
+                                        ce_pipe             = arch.redmule_ce_pipe,
+                                        queue_depth         = arch.redmule_queue_depth,
+                                        tech_node           = arch.tech_node)
 
         # Cluster peripherals
         cluster_registers = ClusterRegisters(self, 'cluster_registers',
             num_cluster_x=arch.num_cluster_x, num_cluster_y=arch.num_cluster_y, nb_cores=arch.nb_core,
-            boot_addr=boot_addr, cluster_id=arch.cluster_id, sync_wakeup_addr=arch.sync_wakeup_addr)
+            boot_addr=boot_addr, cluster_id=arch.cluster_id, sync_wakeup_addr=arch.sync_wakeup_addr,
+            matrix_engine=1 if redmule else 2, mxcore_owners=arch.mxcore_fp4_core_list,
+            matrix_base=arch.redmule_area.base if redmule else arch.mxcore_fp4_reg_base,
+            matrix_stride=arch.redmule_area.size if redmule else arch.mxcore_fp4_reg_size,
+            matrix_irq=arch.mxcore_fp4_irq, layout_base=arch.reg_area.base + arch.reg_area.size + 64)
 
         #data dumpper
         data_dumpper = UtilDumpper(self, 'data_dumpper', arch.cluster_id)
@@ -255,13 +251,12 @@ class ClusterUnit(gvsoc.systree.Component):
         ctrl_base_update = arch.reg_area.base + arch.reg_area.size + data_dumpper_ctrl_size
 
 
-        #Transpose Engine
-        transpose_engine = TransposeEngine(self, f'transpose_engine',
-                                    tcdm_bank_width     = arch.tcdm.bank_width,
-                                    tcdm_bank_number    = arch.tcdm.nb_tcdm_banks,
-                                    buffer_dim          = arch.tcdm.nb_tcdm_banks * arch.tcdm.bank_width)
-        transpose_engine_ctrl_base = ctrl_base_update
-        transpose_engine_ctrl_size = 64
+        #Layout Engine
+        layout_engine = LayoutEngine(self, 'layout_engine',
+            bandwidth=arch.tcdm.hwpe_bandwidth, l1_base=arch.tcdm.area.base,
+            l1_size=arch.tcdm.area.size, conversion_latency=arch.layout_conversion_latency)
+        layout_engine_ctrl_base = ctrl_base_update
+        layout_engine_ctrl_size = 64
         ctrl_base_update += 64
 
         # Cluster DMA
@@ -306,11 +301,20 @@ class ClusterUnit(gvsoc.systree.Component):
         #binding to data dumpper
         narrow_axi.o_MAP(data_dumpper.i_CTRL(), base=data_dumpper_ctrl_base, size=data_dumpper_ctrl_size, rm_base=True)
 
-        #binding to transpose engine
-        narrow_axi.o_MAP(transpose_engine.i_INPUT(), base=transpose_engine_ctrl_base, size=transpose_engine_ctrl_size, rm_base=True)
+        #binding to layout engine
+        narrow_axi.o_MAP(layout_engine.i_INPUT(), base=layout_engine_ctrl_base, size=layout_engine_ctrl_size, rm_base=True)
 
         #binding to redmule
-        narrow_axi.o_MAP(redmule.i_INPUT(), base=arch.redmule_area.base, size=arch.redmule_area.size, rm_base=True)
+        if redmule:
+            narrow_axi.o_MAP(redmule.i_INPUT(), base=arch.redmule_area.base, size=arch.redmule_area.size, rm_base=True)
+        else:
+            for index, owner in enumerate(arch.mxcore_fp4_core_list):
+                engine = MXCoreFP4(self, f'mxcore_fp4_{index}')
+                bridge = MatrixBridge(self, f'mxcore_fp4_bridge_{index}', engine, arch.tcdm.area.base)
+                narrow_axi.o_MAP(bridge.i_INPUT(), base=arch.mxcore_fp4_reg_base + index * arch.mxcore_fp4_reg_size,
+                                 size=arch.mxcore_fp4_reg_size, rm_base=True)
+                bridge.o_MEMORY(tcdm.i_HWPE_INPUT(index))
+                engine.o_IRQ(cores[owner].i_IRQ(arch.mxcore_fp4_irq))
 
         # Read-only program/rodata alias, backed by the shared instruction cache.
         narrow_axi.o_MAP(self.instruction_cache.i_DATA(), base=arch.insn_area.base,
@@ -326,10 +330,11 @@ class ClusterUnit(gvsoc.systree.Component):
 
 
         #RedMule to TCDM
-        redmule.o_TCDM(tcdm.i_HWPE_INPUT())
+        if redmule:
+            redmule.o_TCDM(tcdm.i_HWPE_INPUT(0))
 
-        #Transpose Engine to TCDM
-        transpose_engine.o_TCDM(tcdm.i_HWPE_INPUT())
+        #Layout Engine to TCDM
+        layout_engine.o_TCDM(tcdm.i_HWPE_INPUT(arch.tcdm.hwpe_ports - 1))
 
         # Wire router for DMA and instruction caches
         self.o_WIDE_INPUT(wide_axi_goto_tcdm.i_INPUT())
@@ -346,8 +351,9 @@ class ClusterUnit(gvsoc.systree.Component):
                 offload_decoder.o_OFFLOAD_GRANT(0, cores[x].i_OFFLOAD_GRANT())
                 offload_decoder.o_DMA(idma_list[x].i_OFFLOAD())
                 idma_list[x].o_OFFLOAD_GRANT(offload_decoder.i_DMA_GRANT())
-                offload_decoder.o_REDMULE(redmule.i_OFFLOAD())
-                redmule.o_OFFLOAD_GRANT(offload_decoder.i_REDMULE_GRANT())
+                if redmule:
+                    offload_decoder.o_REDMULE(redmule.i_OFFLOAD())
+                    redmule.o_OFFLOAD_GRANT(offload_decoder.i_REDMULE_GRANT())
                 pass
         else:
             offload_decoder = Arche3dOffloadDecoder(self, 'offload_decoder', nb_cores=arch.nb_core)
@@ -360,8 +366,9 @@ class ClusterUnit(gvsoc.systree.Component):
                 offload_decoder.o_OFFLOAD_GRANT(core_id, cores[core_id].i_OFFLOAD_GRANT())
             offload_decoder.o_DMA(idma.i_OFFLOAD())
             idma.o_OFFLOAD_GRANT(offload_decoder.i_DMA_GRANT())
-            offload_decoder.o_REDMULE(redmule.i_OFFLOAD())
-            redmule.o_OFFLOAD_GRANT(offload_decoder.i_REDMULE_GRANT())
+            if redmule:
+                offload_decoder.o_REDMULE(redmule.i_OFFLOAD())
+                redmule.o_OFFLOAD_GRANT(offload_decoder.i_REDMULE_GRANT())
             pass
 
         # Cores

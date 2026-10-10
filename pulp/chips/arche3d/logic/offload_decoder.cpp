@@ -112,7 +112,9 @@ void Arche3dOffloadDecoder::offload_sync(vp::Block *__this, IssOffloadInsn<uint3
         case 0b0101010:
             _this->trace.msg(vp::Trace::LEVEL_TRACE, "Dispatch old SoftHier RedMule opcode\n");
             _this->pending_redmule_core = core_id;
-            _this->redmule_offload_itf.sync(insn);
+            if (!_this->redmule_offload_itf.is_bound())
+                _this->trace.fatal("RedMule is unavailable: check matrix-engine discovery before issuing its opcodes\n");
+            else _this->redmule_offload_itf.sync(insn);
             break;
 
         default:

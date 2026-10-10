@@ -24,6 +24,14 @@ class FlexClusterArch:
         self.spatz_attaced_core_list = [0, 1, 2, 3]
         self.spatz_num_vlsu_port = 8
         self.spatz_num_function_unit = 4
+        # Choose one matrix architecture for the entire cluster.
+        self.matrix_engine = 'mxcore_fp4'
+        self.mxcore_fp4_core_list = [0, 1, 2, 3]
+        self.mxcore_fp4_reg_base = 0x20020000
+        self.mxcore_fp4_reg_size = 0x200  # also the per-instance stride
+        self.mxcore_fp4_irq = 20
+        self.hwpe_bandwidth = 512  # shared read + write bytes per cycle
+        self.layout_conversion_latency = 5
         self.redmule_ce_height = 16
         self.redmule_ce_width = 32
         self.redmule_ce_pipe = 1

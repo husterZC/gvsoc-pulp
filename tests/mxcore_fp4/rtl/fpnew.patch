@@ -1,0 +1,13 @@
+diff --git a/src/mxdotp/fpnew_mxdotp_multi_modules.sv b/src/mxdotp/fpnew_mxdotp_multi_modules.sv
+index 47d4c75..f3b46fa 100644
+--- a/src/mxdotp/fpnew_mxdotp_multi_modules.sv
++++ b/src/mxdotp/fpnew_mxdotp_multi_modules.sv
+@@ -284,7 +284,7 @@ module fpnew_mxdotp_classifier
+     end
+     for (int i = 0; i < 2; i++) begin : gen_default_assignments_c
+       operands_c[i] = signed'(operands_c_in[i]) - 127; // signed scale, 127 = signed'(2**(SCALE_WIDTH-1)-1)
+-      info_c[i] = '{is_normal: 1'b1, is_nan: operands_c_in[i] == 2**SCALE_WIDTH-1, is_boxed: 1'b1, default: 1'b0}; // normal, boxed value, scale can be NaN
++      info_c[i] = '{is_normal: 1'b1, is_nan: operands_c_in[i] == {SCALE_WIDTH{1'b1}}, is_boxed: 1'b1, default: 1'b0}; // normal, boxed value, scale can be NaN
+     end
+     operand_d = {fmt_dst_sign[dst_fmt], fmt_dst_exponent[dst_fmt], fmt_dst_mantissa[dst_fmt]};
+     info_d    = info_q[dst_fmt][NUM_OPERANDS-1];
