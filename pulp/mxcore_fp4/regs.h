@@ -25,6 +25,21 @@
 // GVSoC diagnostic extensions (not upstream RTL registers).
 #define MXCORE_FP4_CYCLES       0x60
 #define MXCORE_FP4_ERROR        0x64
+#define MXCORE_FP4_NOMINAL_CYCLES 0x68
+#define MXCORE_FP4_STALL_CYCLES  0x6c
+#define MXCORE_FP4_READ_BYTES    0x70
+#define MXCORE_FP4_WRITE_BYTES   0x74
+#define MXCORE_FP4_START_LOW     0x78
+#define MXCORE_FP4_START_HIGH    0x7c
+#define MXCORE_FP4_OUTPUT_MXFP4  0u
+#define MXCORE_FP4_OUTPUT_FP32   1u
+#define MXCORE_FP4_OUTPUT_BF16   2u
+#define MXCORE_FP4_OUTPUT_FP16   3u
+#define MXCORE_FP4_OUTPUT_E4M3   4u
+#define MXCORE_FP4_OUTPUT_E5M2   5u
+// CTRL_ENGINE[25:23] selects result storage, independently of FP32 accumulation.
+#define MXCORE_FP4_CONTROL_FORMAT(format) \
+    (((format)<<23)|((format)==0 ? (1u<<21) : 0)|(8u<<9)|(19u<<3))
 #define MXCORE_FP4_CONTROL      ((1u<<21)|(8u<<9)|(19u<<3))
 
 // Call after acquiring job 0, with 32-byte-aligned pointers and a supported

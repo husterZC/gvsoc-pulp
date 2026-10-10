@@ -100,6 +100,12 @@ instance order and IRQ ownership. Each MXCore has a 0x200-byte register window
 starting at 0x20020000 and an owner IRQ on line 20. Hardware discovery exposes
 the engine kind, count, owners, register map and IRQ to the SDK.
 
+MXCore inputs use MXFP4 and accumulation uses FP32. Output storage can be
+MXFP4, FP32, BF16, FP16, FP8 E4M3, or FP8 E5M2. The calibrated shapes include
+the original 54 M/N/K combinations plus 32×32×576 and 32×192×64 for all outputs; see the
+[MXCore model contract](../../mxcore_fp4/README.md) for packing, rounding,
+registers, measured timing, and the contention model's limits.
+
 The shared `layout_engine` replaces `transpose_engine` at 0x20000240. It retains
 byte/halfword transpose and adds MXFP4→FP8 (E5M2/E4M3), MXFP4→BF16,
 BF16→MXFP4 and FP16→MXFP4 streaming conversion with five internal cycles.

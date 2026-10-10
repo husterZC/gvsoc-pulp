@@ -44,7 +44,7 @@ def load_arch(config='default'):
     matrix_size = arch.mxcore_fp4_reg_size * len(owners) if owners else arch.redmule_reg_size
     if (matrix_base < 0 or matrix_base % 4 or matrix_size < 0x68 or
             matrix_base + matrix_size > 1 << 32 or arch.mxcore_fp4_reg_size % 4 or
-            (owners and arch.mxcore_fp4_reg_size < 0x68)):
+            (owners and arch.mxcore_fp4_reg_size < 0x80)):
         raise ValueError('Matrix register windows must be word aligned and fit RV32')
     bank_bytes = arch.cluster_tcdm_bank_width // 8
     if (bank_bytes < 4 or bank_bytes & (bank_bytes - 1) or

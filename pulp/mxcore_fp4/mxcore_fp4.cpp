@@ -24,12 +24,14 @@ private:
     vp::IoReq request;
     mxcore_fp4::Compute compute;
     const mxcore_fp4::Profile *profile=nullptr;
+    const uint32_t *transfers=nullptr;
     std::array<uint32_t,13> regs{};
     std::array<uint32_t,6> bases{};
     std::array<uint8_t,32> payload{};
     unsigned index=0, nominal=0, region=0, offset=0;
     int64_t start_cycle=0, issue_cycle=0, stalls=0;
     uint32_t elapsed=0, error=0;
+    uint32_t nominal_cycles=0, read_bytes=0, write_bytes=0;
     bool busy=false, acquired=false, done=false, pending=false, denied=false;
     bool canceled=false, completing=false;
 
@@ -39,6 +41,7 @@ private:
         event.cancel();
         regs.fill(0); busy=false; acquired=false; done=false;
         elapsed=0; error=0; completing=false;
+        stalls=0; start_cycle=0; nominal_cycles=0; read_bytes=0; write_bytes=0;
         // A request already accepted by memory must retain its payload until
         // the response arrives. Reject a new trigger during that drain.
         canceled=pending;
@@ -82,6 +85,12 @@ private:
             case 0x10: value=s.busy ? 0 : 0xffffffffU; break;
             case 0x60: value=s.elapsed; break;
             case 0x64: value=s.error; break;
+            case 0x68: value=s.nominal_cycles; break;
+            case 0x6c: value=s.stalls; break;
+            case 0x70: value=s.read_bytes; break;
+            case 0x74: value=s.write_bytes; break;
+            case 0x78: value=uint64_t(s.start_cycle); break;
+            case 0x7c: value=uint64_t(s.start_cycle)>>32; break;
             default: return invalid();
             }
         }
@@ -93,29 +102,36 @@ private:
     bool launch() {
         if (busy || pending || !acquired) return false;
         unsigned m=regs[6]&1023, k=(regs[6]>>10)&4095, n=regs[6]>>22;
-        profile=mxcore_fp4::find_profile(m,n,k);
+        auto format=mxcore_fp4::OutputFormat((regs[7]>>23)&7);
+        unsigned bits=mxcore_fp4::output_bits(format);
+        profile=mxcore_fp4::find_output_profile(m,n,k,format,transfers);
+        unsigned control=(unsigned(format)<<23)|(format==mxcore_fp4::OutputFormat::MXFP4 ? 1U<<21 : 0)|
+                         (8U<<9)|(19U<<3);
         // No silent rounding, fallback format, or extrapolation to an unmeasured shape.
-        if (!profile || regs[7]!=((1U<<21)|(8U<<9)|(19U<<3)) ||
+        if (!profile || !bits || regs[7]!=control ||
             regs[8]!=((m/32)|((n/32)<<4)|((k/16)<<9)|((k/32)<<16)) ||
-            regs[9]!=2048 || regs[10]!=2048 || regs[11]!=4096 || regs[12]!=k) {
+            regs[9]!=2048 || regs[10]!=2048 || regs[11]!=32*32*bits || regs[12]!=k) {
             error=1; return false;
         }
-        compute.init(m,n,k);
+        compute.init(m,n,k,format);
         for (unsigned i=0; i<6; ++i) {
             bases[i]=regs[i];
-            if ((bases[i]&31) || uint64_t(bases[i])+compute.data[i].size()>0x100000000ULL) {
+            if (!compute.data[i].empty() && ((bases[i]&31) ||
+                uint64_t(bases[i])+compute.data[i].size()>0x100000000ULL)) {
                 error=1; return false;
             }
         }
         for (unsigned i=4; i<6; ++i) for (unsigned j=0; j<i; ++j)
-            if (uint64_t(bases[i]) < uint64_t(bases[j])+compute.data[j].size() &&
+            if (!compute.data[i].empty() && !compute.data[j].empty() &&
+                uint64_t(bases[i]) < uint64_t(bases[j])+compute.data[j].size() &&
                 uint64_t(bases[j]) < uint64_t(bases[i])+compute.data[i].size()) {
                 error=1; return false;
             }
         busy=true; acquired=false; done=false; error=0; elapsed=0;
         canceled=false; completing=false; signal(false);
         start_cycle=clock.get_cycles(); stalls=0; index=0;
-        nominal=mxcore_fp4::transfers[profile->first]>>16;
+        nominal_cycles=profile->cycles; read_bytes=0; write_bytes=0;
+        nominal=transfers[profile->first]>>16;
         event.enqueue(nominal);
         return true;
     }
@@ -131,14 +147,15 @@ private:
         int64_t now=clock.get_cycles();
         if (due>now) { event.enqueue(due-now); return; }
         if (index==profile->count) { finish(); return; }
-        uint32_t word=mxcore_fp4::transfers[profile->first+index];
+        uint32_t word=transfers[profile->first+index];
         region=(word>>13)&7; offset=(word&8191)*32;
         if (region>=6 || offset+32>compute.data[region].size())
             trace.fatal("Invalid MXCoreFP4 calibration profile\n");
         if (region>=4) {
-            unsigned first=region==4 ? offset/16 : offset;
-            unsigned count=region==4 ? 2 : 32;
-            try { for (unsigned b=first; b<first+count; ++b) compute.block(b); }
+            unsigned block_bytes=32*mxcore_fp4::output_bits(compute.format)/8;
+            unsigned first=region==4 ? offset/block_bytes : offset;
+            unsigned last=region==4 ? (offset+31)/block_bytes : offset+31;
+            try { for (unsigned b=first; b<=last; ++b) compute.block(b); }
             catch (const std::exception &e) { trace.fatal("%s\n",e.what()); }
             std::memcpy(payload.data(), compute.data[region].data()+offset, 32);
         }
@@ -171,12 +188,13 @@ private:
     }
     void complete_transfer() {
         completing=false;
+        if (region<4) read_bytes+=32; else write_bytes+=32;
         if (region<4) {
             std::memcpy(compute.data[region].data()+offset, payload.data(), 32);
             std::fill(compute.present[region].begin()+offset, compute.present[region].begin()+offset+32, true);
         }
         ++index;
-        if (index<profile->count) nominal+=mxcore_fp4::transfers[profile->first+index]>>16;
+        if (index<profile->count) nominal+=transfers[profile->first+index]>>16;
         drive();
     }
     static void step(vp::Block *block, vp::ClockEvent *) {

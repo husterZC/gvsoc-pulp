@@ -1,11 +1,13 @@
 # MXCoreFP4
 
 `pulp.mxcore_fp4.MXCoreFP4` models `C[M,N] = A[M,K] × B[K,N]` with packed
-MXFP4 E2M1 inputs and outputs, E8M0 scales, and FP32 accumulation. It accepts
-exactly these 54 calibrated shapes:
+MXFP4 E2M1 inputs, E8M0 input scales, and FP32 accumulation. Output storage is
+selectable: MXFP4, FP32, BF16, FP16, FP8 E4M3, or FP8 E5M2. It accepts these
+calibrated shapes for every output format:
 
 - M and N: 32, 64, 128.
 - K (the shared dimension): 32, 64, 96, 128, 160, 192.
+- Additionally, (M,N,K)=(32,32,576) and (32,192,64) (56 shapes total).
 
 The model is a functional accelerator with **measured transaction schedules**.
 It computes results from the memory contents supplied by the simulated system;
@@ -25,10 +27,14 @@ values. The calibration variant makes these explicit changes:
 2. Uses a scale per **32 FP4 values** on inputs, matching the output block size.
 3. Fixes a signed comparison in FPnew that otherwise fails to recognize E8M0
    `0xff` as NaN. The scale comparison now uses an 8-bit all-ones constant.
+4. Retains the upstream native FP32 output path and adds combinational RNE
+   converters for BF16, FP16, E4M3, and E5M2, each feeding the existing style of
+   two-entry output FIFO and 256-bit streamer. These casts add no pipeline stage;
+   their buffering, serialization, and completion timing is measured in RTL.
 
 The upstream arithmetic datapath, controller, streamer, and FIFOs are simulated
 in Verilator. The shared FP8 hardware paths remain enabled because the upstream
-FP4 dot product uses them. Only FP4 jobs are exposed by this GVSoC model.
+FP4 dot product uses them. Only FP4 inputs are exposed by this GVSoC model.
 
 | Parameter | Value |
 | --- | --- |
@@ -39,7 +45,7 @@ FP4 dot product uses them. Only FP4 jobs are exposed by this GVSoC model.
 | Peak FP4 throughput | 1,024 MACs/cycle |
 | TCDM | 256 bits, eight 32-bit banks |
 | Calibration memory | Always granted, one-cycle responses |
-| Input/output scale block | 32 elements |
+| Input/MXFP4 output scale block | 32 elements; native outputs have no scale |
 | Accumulator initialization | Zero; no preload |
 
 Latency is measured from the trigger acceptance edge to the completion event.
@@ -63,8 +69,24 @@ The nominal cycle error is zero by construction of the measured schedules.
 
 See [calibration.json](../../tests/mxcore_fp4/calibration.json) for the RTL
 revision, tool versions, configuration, seeds, and input/output/trace hashes.
-The [calibration test directory](../../tests/mxcore_fp4) contains the runner,
-independent Python oracle, RTL driver, and reproducible source patches.
+The original [calibration test directory](../../tests/mxcore_fp4) contains the
+MXFP4 baseline. The output extension, reproducible RTL preparation, arithmetic
+oracle, calibration records, and Arche3D benchmark are in the enclosing GVSoC
+repository's `scripts/mxcore_fp4/`. `output_profiles.inc` contains the measured
+schedules for all six outputs; the legacy MXFP4 schedules remain unchanged.
+
+For 32×32×576, nominal unstalled RTL cycles are: MXFP4 729, FP32 834,
+BF16/FP16 770, and E4M3/E5M2 738. These exclude MMIO setup and do not include
+Arche3D L1/interconnect service delays.
+
+The two additional benchmark conditions have the following unstalled timings.
+Both shapes perform 393,216 MACs; N=192 produces three times as many output
+elements as N=64. Input traffic includes A rereads for successive N tiles.
+
+| M×N×K | MXFP4 | FP32 | BF16/FP16 | E4M3/E5M2 |
+| --- | ---: | ---: | ---: | ---: |
+| 32×64×192 | 507 | 718 | 594 | 532 |
+| 32×192×64 | 544 | 1200 | 816 | 624 |
 
 Delayed, asynchronous, denied/retried, and failed memory requests are supported
 and regression-tested. Each extra memory-service cycle stretches the remaining
@@ -100,8 +122,8 @@ buffers may alias. Matrices are tightly packed in the RTL's tiled traversal:
 | B | N tile, K block, column within tile, 32 K elements | N×K/2 |
 | Scale A | M tile, K block, row within tile | M×K/32 |
 | Scale B | N tile, K block, column within tile | N×K/32 |
-| C | M tile, N tile, row within tile, 32 columns | M×N/2 |
-| Scale C | M tile, N tile, row within tile | M×N/32 |
+| C | M tile, N tile, row within tile, 32 columns | M×N×output_bits/8 |
+| Scale C (MXFP4 only) | M tile, N tile, row within tile | M×N/32 |
 
 Every tile dimension and K block has 32 elements. Consecutive elements occupy
 the low then high nibble of each byte. B is packed by columns, not as a plain
@@ -112,11 +134,19 @@ E2M1 magnitudes are `{0, 0.5, 1, 1.5, 2, 3, 4, 6}`; bit 3 carries the sign.
 An E8M0 byte `s` in 0–254 multiplies the values by `2^(s-127)`; 255 denotes a
 NaN block. Each 32-term dot product is accumulated with one FP32 rounding,
 then the next K block is accumulated in order. For an output block, the shared
-exponent is `floor(log2(max_abs))-2`, clamped to the E8M0 finite range. All-zero
+exponent for MXFP4 is `floor(log2(max_abs))-2`, clamped to the E8M0 finite range. All-zero
 blocks use scale 127. A block containing a nonfinite accumulator uses scale
 255 and zero element payloads. The output quantizer preserves signs on finite
 values rounded to zero. Directed RTL checks cover zero, ones, rounding ties,
 saturation, wide exponents, subnormal accumulation, and NaN scales.
+
+Native outputs store little-endian IEEE values in the same tile order, with no
+scale buffer. FP32 stores the accumulator directly. Narrow outputs round once
+from FP32, with ties to even, gradual underflow, signed zero, infinity on
+overflow, and canonical quiet NaNs. **E4M3 is the IEEE-style encoding with
+infinities/NaNs, not E4M3FN**; this matches the Arche3D SDK's existing FP8 API.
+Native output NaNs affect individual elements; MXFP4 poisons the whole block.
+RESULT_SCALE is ignored for native outputs and may be zero.
 
 ## Programming
 
@@ -130,11 +160,33 @@ the single-context job/IRQ interface below is the model's software interface.
 4. Wait for IRQ or FINISHED (0x08); check ERROR (0x64).
 5. Write FINISHED to acknowledge completion and lower IRQ.
 
+`mxcore_fp4_program()` retains MXFP4 output. To select another format after that
+helper, set CTRL_ENGINE to `MXCORE_FP4_CONTROL_FORMAT(format)` and C_TILE_BITS
+to `32*32*output_bits` before triggering. Format IDs in CTRL_ENGINE[25:23] are
+0 MXFP4, 1 FP32, 2 BF16, 3 FP16, 4 E4M3, 5 E5M2. Bit 21 is set only for MXFP4;
+the FP32 accumulation selector remains unchanged. All six pointers must still
+be programmed, although RESULT_SCALE is unused for native outputs.
+
 STATUS (0x0c) is busy. CYCLES (0x60) reports elapsed accelerator cycles, including
 extra memory delay. ERROR is 0 for success, 1 for invalid configuration, and 2
 for memory failure. CYCLES and ERROR are GVSoC diagnostics, absent in upstream
 RTL. Unsupported accesses return `IO_RESP_INVALID` without starting a job.
 Configuration writes and a second trigger are rejected while busy.
+
+Additional read-only GVSoC diagnostics, stable after completion:
+
+| Offset | Value |
+| --- | --- |
+| 0x68 | Nominal calibrated RTL cycles for the last job |
+| 0x6c | Extra memory-service cycles added to the schedule |
+| 0x70, 0x74 | Completed read bytes, completed write bytes |
+| 0x78, 0x7c | Low/high words of trigger acceptance cycle in this clock domain |
+
+For successful jobs, CYCLES = nominal cycles + memory-service cycles. These
+counters do not measure PE active cycles. Useful-MAC utilization is
+`M*N*K / (1024 * elapsed_cycles)`. Cluster utilization uses the sum of useful
+MACs divided by the physical engine count times 1024 times the interval from
+the earliest trigger to the latest completion, including idle engines.
 
 SOFT_CLEAR (0x14) clears registers, completion, IRQ, and scheduled work. An
 outstanding memory request is drained before another job can be acquired;

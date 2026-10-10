@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
+#include "format.hpp"
 
 namespace mxcore_fp4 {
 // FP4 E2M1 values multiplied by two, including both signs of zero.
@@ -31,13 +32,16 @@ inline uint8_t quantize(float value, int exponent) {
 
 struct Compute {
     unsigned m=0, n=0, k=0;
+    OutputFormat format=OutputFormat::MXFP4;
     std::array<std::vector<uint8_t>, 6> data;
     std::array<std::vector<bool>, 4> present;
     std::vector<bool> ready;
 
-    void init(unsigned rows, unsigned cols, unsigned inner) {
+    void init(unsigned rows, unsigned cols, unsigned inner, OutputFormat result=OutputFormat::MXFP4) {
         m=rows; n=cols; k=inner;
-        std::array<unsigned,6> sizes{m*k/2, n*k/2, m*k/32, n*k/32, m*n/2, m*n/32};
+        format=result;
+        std::array<unsigned,6> sizes{m*k/2, n*k/2, m*k/32, n*k/32,
+                                    m*n*output_bits(format)/8, format==OutputFormat::MXFP4 ? m*n/32 : 0};
         for (unsigned i=0; i<6; ++i) data[i].assign(sizes[i], 0);
         for (unsigned i=0; i<4; ++i) present[i].assign(sizes[i], false);
         ready.assign(m*n/32, false);
@@ -81,11 +85,20 @@ struct Compute {
             poison |= !std::isfinite(acc);
             maximum=std::max(maximum, std::abs(acc));
         }
-        int exponent=maximum ? std::max(-127, std::min(127, std::ilogb(maximum)-2)) : 0;
-        data[5][block_index]=poison ? 255 : exponent+127;
-        for (unsigned j=0; j<16; ++j)
-            data[4][block_index*16+j]=poison ? 0 :
-                quantize(output[2*j],exponent) | (quantize(output[2*j+1],exponent)<<4);
+        if (format==OutputFormat::MXFP4) {
+            int exponent=maximum ? std::max(-127, std::min(127, std::ilogb(maximum)-2)) : 0;
+            data[5][block_index]=poison ? 255 : exponent+127;
+            for (unsigned j=0; j<16; ++j)
+                data[4][block_index*16+j]=poison ? 0 :
+                    quantize(output[2*j],exponent) | (quantize(output[2*j+1],exponent)<<4);
+        } else {
+            unsigned bytes=output_bits(format)/8;
+            for (unsigned j=0; j<32; ++j) {
+                uint32_t encoded=encode_output(output[j],format);
+                for (unsigned b=0; b<bytes; ++b)
+                    data[4][(block_index*32+j)*bytes+b]=encoded>>(8*b);
+            }
+        }
         ready[block_index]=true;
     }
 };

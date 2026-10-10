@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""MXFP4-only MXCore, calibrated for the 54 shapes documented in README.md."""
+"""MXCore with MXFP4 inputs, FP32 accumulation and six calibrated output formats."""
 import gvsoc.systree as st
 
 
